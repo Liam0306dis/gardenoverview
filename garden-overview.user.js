@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.00
+// @version      1.01
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://magiccircle.gg/r/*
@@ -10,6 +10,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
+// @updateURL    https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overview.user.js
+// @downloadURL  https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overview.user.js
 // @run-at       document-start
 // ==/UserScript==
 (function() {
@@ -208,6 +210,7 @@
             missingDawnlit: 0, missingDawncharged: 0,
             missingAmberDawn: 0, missingDawnAmbercharged: 0,
             missingThunderstruck: 0, missingFrozenAndThunderstruck: 0,
+            frozenCount: 0, wetCount: 0, chilledCount: 0, thunderstruckCount: 0,
             noMutations: 0, notMature: 0, notMaxSize: 0,
             matureCount: 0, readyNow: 0,
             boostsUntilMaxSize: 0, totalFarmValue: 0,
@@ -321,9 +324,10 @@
 
                 if (isTargetSpecies && !mutations.includes(RAINBOW_MUTATION) && !mutations.includes(GOLD_MUTATION)) stats.missingRainbow++;
                 if (isTargetSpecies && mutations.includes(GOLD_MUTATION)) stats.goldCount++;
-                if (isTargetSpecies && !mutations.includes(GOLD_MUTATION)) stats.missingGold++;
-                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION)) stats.missingFrozen++;
-                if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION)) stats.missingAmber++;
+                if (isTargetSpecies && !mutations.includes(GOLD_MUTATION) && !mutations.includes(RAINBOW_MUTATION)) stats.missingGold++;
+                if (isTargetSpecies && mutations.includes(FROZEN_MUTATION)) stats.frozenCount++;
+                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck') && !mutations.includes('Wet') && !mutations.includes('Chilled')) stats.missingFrozen++;
+                if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit') && !mutations.includes('Dawncharged')) stats.missingAmber++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION)) stats.missingAmbercharged++;
                 if (isTargetSpecies) {
                     const key = tile.species;
@@ -331,17 +335,22 @@
                     if (mutations.includes('Gold'))    stats.plantCounts[`${key}Gold`]    = (stats.plantCounts[`${key}Gold`]    || 0) + 1;
                 }
                 if (isTargetSpecies) {
-                    if (!mutations.includes('Thunderstruck'))                                                               stats.missingThunderstruck++;
-                    if (!mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck'))                       stats.missingFrozenAndThunderstruck++;
-                }
-                if (isTargetSpecies) {
-                    if (!mutations.includes('Wet'))                     stats.missingWet++;
-                    if (!mutations.includes('Chilled'))                 stats.missingChilled++;
+                    const hasThunderstruck = mutations.includes('Thunderstruck');
+                    const hasFrozenMut = mutations.includes(FROZEN_MUTATION);
+                    const hasWet = mutations.includes('Wet');
+                    const hasChilled = mutations.includes('Chilled');
+                    if (hasWet) stats.wetCount++;
+                    if (!hasWet && !hasThunderstruck && !hasFrozenMut) stats.missingWet++;
+                    if (hasChilled) stats.chilledCount++;
+                    if (!hasChilled && !hasThunderstruck && !hasFrozenMut) stats.missingChilled++;
                     if (!mutations.includes(AMBERSHINE_MUTATION))       stats.missingAmberlit++;
                     if (!mutations.includes('Dawnlit'))                 stats.missingDawnlit++;
                     if (!mutations.includes('Dawncharged'))             stats.missingDawncharged++;
                     if (!mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit'))           stats.missingAmberDawn++;
                     if (!mutations.includes('Dawncharged') && !mutations.includes(AMBERCHARGED_MUTATION))     stats.missingDawnAmbercharged++;
+                    if (hasThunderstruck) stats.thunderstruckCount++;
+                    if (!hasThunderstruck && !hasWet && !hasChilled && !hasFrozenMut) stats.missingThunderstruck++;
+                    if (!hasFrozenMut && !hasThunderstruck && !hasWet && !hasChilled) stats.missingFrozenAndThunderstruck++;
                 }
                 if (isTargetSpecies && mutations.length === 0) stats.noMutations++;
 
@@ -470,7 +479,7 @@
             gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
             frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
-            wet:         getGranterETA(activePets, 'RainDance',       10.0, stats.missingWet),
+            wet:         getGranterETA(activePets, 'RainDance',          10.0, stats.missingWet),
             chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  stats.missingChilled),
             cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, stats.boostsUntilMaxSize),
             cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
@@ -508,17 +517,17 @@
         const rainbowOnlyHave       = totalSlots - stats.missingRainbow - stats.goldCount;
         const goldHave              = stats.goldCount;
         const rainbowOrGoldHave     = totalSlots - stats.missingRainbow;
-        const frozenHave            = totalSlots - stats.missingFrozen;
-        const wetHave               = totalSlots - stats.missingWet;
-        const chilledHave           = totalSlots - stats.missingChilled;
+        const frozenHave            = stats.frozenCount;
+        const wetHave               = stats.wetCount;
+        const chilledHave           = stats.chilledCount;
         const amberlitHave          = totalSlots - stats.missingAmberlit;
         const dawnlitHave           = totalSlots - stats.missingDawnlit;
         const dawnchargedHave       = totalSlots - stats.missingDawncharged;
         const amberchargedHave      = totalSlots - stats.missingAmbercharged;
         const amberDawnHave         = totalSlots - stats.missingAmberDawn;
         const dawnAmberchargedHave  = totalSlots - stats.missingDawnAmbercharged;
-        const thunderstruckHave         = totalSlots - stats.missingThunderstruck;
-        const frozenOrThunderstruckHave = totalSlots - stats.missingFrozenAndThunderstruck;
+        const thunderstruckHave         = stats.thunderstruckCount;
+        const frozenOrThunderstruckHave = stats.frozenCount + stats.thunderstruckCount;
 
         function formatEtaSec(sec) {
             const totalMin = Math.round(sec / 60);
