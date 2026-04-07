@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.01
+// @version      1.02
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://magiccircle.gg/r/*
@@ -675,7 +675,7 @@
             </div>` : '';
 
         popup.innerHTML = `
-            <div style="background:#0a1f1f;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;">
+            <div style="background:#0a1f1f;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;cursor:move;">
                 <span style="font-size:13px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;">&#x1F33F; Garden Overview</span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <button class="species-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked plants">&#x1F33F;</button>
@@ -773,9 +773,6 @@
             const speciesGui = document.createElement('div');
             speciesGui.id = 'species-config-gui';
             speciesGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:230px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
-            const pr = popup.getBoundingClientRect();
-            speciesGui.style.top = pr.top + 'px';
-            speciesGui.style.left = Math.min(window.innerWidth - 244, pr.right + 8) + 'px';
 
             function buildSpeciesPill(key, cfg) {
                 const on = !!cfg[key];
@@ -813,6 +810,8 @@
             }
             renderSpeciesGui();
             document.body.appendChild(speciesGui);
+            speciesGui.style.left = Math.round((window.innerWidth  - speciesGui.offsetWidth)  / 2) + 'px';
+            speciesGui.style.top  = Math.round((window.innerHeight - speciesGui.offsetHeight) / 2) + 'px';
         });
 
         // Mutation config button
@@ -824,9 +823,6 @@
             const cfgGui = document.createElement('div');
             cfgGui.id = 'mut-config-gui';
             cfgGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
-            const pr = popup.getBoundingClientRect();
-            cfgGui.style.top = pr.top + 'px';
-            cfgGui.style.left = Math.max(4, pr.left - 210) + 'px';
 
             function buildPill(key, cfg) {
                 const on = cfg[key] !== false;
@@ -889,6 +885,8 @@
             }
             renderCfgGui();
             document.body.appendChild(cfgGui);
+            cfgGui.style.left = Math.round((window.innerWidth  - cfgGui.offsetWidth)  / 2) + 'px';
+            cfgGui.style.top  = Math.round((window.innerHeight - cfgGui.offsetHeight) / 2) + 'px';
         });
     }
 
@@ -912,9 +910,6 @@
         popup.id = 'farm-stats-popup';
         popup.style.cssText = `
             position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
             background: #0d1117;
             color: #e0e0e0;
             border-radius: 12px;
@@ -929,6 +924,39 @@
         `;
         document.body.appendChild(popup);
         updatePopupContent(popup);
+
+        // Restore saved position or centre
+        const savedPopupPos = getMagicCircleValue('go_popup_position', null);
+        if (savedPopupPos) {
+            popup.style.left = savedPopupPos.left;
+            popup.style.top  = savedPopupPos.top;
+        } else {
+            popup.style.left = Math.round((window.innerWidth  - popup.offsetWidth)  / 2) + 'px';
+            popup.style.top  = Math.round((window.innerHeight - popup.offsetHeight) / 2) + 'px';
+        }
+
+        // Drag logic — listener on popup itself so it survives innerHTML refreshes
+        let dragging = false, dragOffX, dragOffY;
+        popup.addEventListener('mousedown', function(e) {
+            const header = popup.firstElementChild;
+            if (!header || !header.contains(e.target)) return;
+            if (e.target.tagName === 'BUTTON') return;
+            dragging = true;
+            dragOffX = e.clientX - popup.getBoundingClientRect().left;
+            dragOffY = e.clientY - popup.getBoundingClientRect().top;
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            const maxLeft = window.innerWidth  - popup.offsetWidth;
+            const maxTop  = window.innerHeight - popup.offsetHeight;
+            popup.style.left = Math.max(0, Math.min(maxLeft, e.clientX - dragOffX)) + 'px';
+            popup.style.top  = Math.max(0, Math.min(maxTop,  e.clientY - dragOffY)) + 'px';
+        });
+        document.addEventListener('mouseup', function() {
+            if (dragging) setMagicCircleValue('go_popup_position', { left: popup.style.left, top: popup.style.top });
+            dragging = false;
+        });
 
         popup.refreshInterval = setInterval(() => {
             if (!document.getElementById('farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
