@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.02
+// @version      1.03
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://magiccircle.gg/r/*
@@ -17,9 +17,12 @@
 (function() {
     'use strict';
 
+    console.log('[GardenOverview] Script starting, run-at=document-start');
+
     // === State ===
     const state = { atoms: {} };
     const targetWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    console.log('[GardenOverview] unsafeWindow available:', typeof unsafeWindow !== 'undefined');
     const hookedAtoms = new Set();
 
     // === Pet catalog capture ===
@@ -54,6 +57,7 @@
                 if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
                 return result;
             };
+            console.log('[GardenOverview] Object.keys override installed');
         } catch(e) { console.warn('[GardenOverview] Pet catalog capture failed:', e); }
     })();
 
@@ -82,6 +86,7 @@
         const originalRead = atom.read;
         atom.read = function(get) {
             const value = originalRead.call(this, get);
+            if (!state.atoms[key]) console.log('[GardenOverview] Atom captured:', key);
             state.atoms[key] = value;
             return value;
         };
@@ -95,10 +100,12 @@
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/inventoryAtoms.ts/myInventoryAtom',         'inventory'],
         ];
 
+        console.log('[GardenOverview] Waiting for jotaiAtomCache...');
         const hookAll = () => atoms.forEach(([path, key]) => hookAtom(path, key));
         const interval = setInterval(() => {
             const cache = targetWindow.jotaiAtomCache?.cache || targetWindow.jotaiAtomCache;
             if (cache?.size > 0) {
+                console.log('[GardenOverview] jotaiAtomCache found, size:', cache.size, '- hooking atoms');
                 hookAll();
                 clearInterval(interval);
             }
@@ -966,6 +973,7 @@
 
     // === Trigger button ===
     function createTriggerButton() {
+        console.log('[GardenOverview] createTriggerButton called, document.body:', !!document.body);
         if (document.getElementById('garden-overview-trigger')) return;
         const btn = document.createElement('button');
         btn.id = 'garden-overview-trigger';
@@ -991,15 +999,21 @@
         `;
         btn.onclick = showFarmStatsPopup;
         document.body.appendChild(btn);
+        console.log('[GardenOverview] Trigger button added to page');
     }
 
     // === Init ===
+    console.log('[GardenOverview] Init, document.readyState:', document.readyState, '| document.body:', !!document.body);
     initAtomHooks();
 
     if (document.body) {
         createTriggerButton();
     } else {
-        document.addEventListener('DOMContentLoaded', createTriggerButton);
+        console.log('[GardenOverview] Waiting for DOMContentLoaded...');
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('[GardenOverview] DOMContentLoaded fired');
+            createTriggerButton();
+        });
     }
 
 })();
