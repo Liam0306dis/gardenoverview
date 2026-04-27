@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.03
+// @version      1.04
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://magiccircle.gg/r/*
@@ -207,7 +207,7 @@
         const currentTime = Date.now();
         const activePets = state.atoms.activePets || [];
         const inventoryPets = (state.atoms.inventory?.items || []).filter(i => i.itemType === 'Pet');
-        const hutchPets = (state.atoms.inventory?.items || []).filter(i => i.itemType === 'PetHutch').flatMap(h => h.items || []);
+        const hutchPets = (state.atoms.inventory?.storages || []).filter(s => s.decorId === 'PetHutch').flatMap(s => s.items || []);
         const allAvailablePets = [...activePets, ...inventoryPets, ...hutchPets];
 
         const stats = {
@@ -391,6 +391,33 @@
                 }
             });
         });
+
+        // Double Harvest & Crop Refund multipliers — best 3 available pets each
+        function getPetStr(p) {
+            const ms = asPetMaxScale(p.petSpecies);
+            const xl = asPetXpPerLevel(p.petSpecies);
+            if (!ms || !xl) return 87;
+            const xpComp    = Math.min(Math.floor((p.xp || 0) / xl), 30);
+            const scaleComp = Math.floor((((p.targetScale || 1) - 1) / (ms - 1)) * 20 + 80) - 30;
+            return xpComp + scaleComp;
+        }
+        const doubleHarvestStrs = allAvailablePets
+            .filter(p => p.hunger > 0 && (p.abilities || []).includes('DoubleHarvest'))
+            .map(p => getPetStr(p))
+            .sort((a, b) => b - a)
+            .slice(0, 3);
+        const P_double = doubleHarvestStrs.reduce((s, str) => s + 0.05 * str / 100, 0);
+        const doubleHarvestMult = 1 + P_double;
+
+        const refundStrs = allAvailablePets
+            .filter(p => p.hunger > 0 && (p.abilities || []).includes('ProduceRefund'))
+            .map(p => getPetStr(p))
+            .sort((a, b) => b - a)
+            .slice(0, 3);
+        const P_refund = 1 - refundStrs.reduce((prod, str) => prod * (1 - 0.20 * str / 100), 1);
+        const cropRefundMult = P_refund < 0.9999 ? 1 / (1 - P_refund) : 10000;
+
+        stats.totalFarmValue = Math.round(stats.totalFarmValue * doubleHarvestMult * cropRefundMult);
 
         const timeRemaining = Math.max(0, stats.maxEndTime - currentTime);
         const remainingRealMinutes = timeRemaining / (1000 * 60);
