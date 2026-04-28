@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.04
+// @version      1.05
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://magiccircle.gg/r/*
@@ -414,7 +414,7 @@
             .map(p => getPetStr(p))
             .sort((a, b) => b - a)
             .slice(0, 3);
-        const P_refund = 1 - refundStrs.reduce((prod, str) => prod * (1 - 0.20 * str / 100), 1);
+        const P_refund = refundStrs.reduce((sum, str) => sum + 0.20 * str / 100, 0);
         const cropRefundMult = P_refund < 0.9999 ? 1 / (1 - P_refund) : 10000;
 
         stats.totalFarmValue = Math.round(stats.totalFarmValue * doubleHarvestMult * cropRefundMult);
