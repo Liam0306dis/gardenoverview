@@ -4,6 +4,7 @@
 // @version      1.05
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
+// @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
 // @match        https://magicgarden.gg/r/*
 // @match        https://starweaver.org/r/*
