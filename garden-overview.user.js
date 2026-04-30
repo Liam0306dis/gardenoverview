@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.06
+// @version      1.07
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -716,6 +716,7 @@
                 <div style="display:flex;align-items:center;gap:4px;">
                     <button class="species-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked plants">&#x1F33F;</button>
                     <button class="mut-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked mutations">&#x2699;</button>
+                    <button class="keybind-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure keybind">&#x2328;</button>
                     <button class="close-farm-stats-btn" style="background:#c0392b;color:white;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;">&#x2715;</button>
                 </div>
             </div>
@@ -778,7 +779,103 @@
             popup.remove();
             document.getElementById('mut-config-gui')?.remove();
             document.getElementById('species-config-gui')?.remove();
+            document.getElementById('keybind-config-gui')?.remove();
         };
+
+        // Keybind config button
+        popup.querySelector('.keybind-config-btn').addEventListener('click', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            const existing = document.getElementById('keybind-config-gui');
+            if (existing) { existing.remove(); return; }
+
+            const kbGui = document.createElement('div');
+            kbGui.id = 'keybind-config-gui';
+            kbGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+
+            const hdr = document.createElement('div');
+            hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
+            hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x2328; Keybind</span>';
+            const closebtn = document.createElement('button'); closebtn.textContent = '✕';
+            closebtn.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
+            closebtn.onclick = () => kbGui.remove();
+            hdr.appendChild(closebtn);
+            kbGui.appendChild(hdr);
+
+            const body = document.createElement('div');
+            body.style.cssText = 'padding:10px 12px;display:flex;flex-direction:column;gap:8px;';
+
+            function formatKeybind(kb) {
+                if (!kb?.key) return '— not set —';
+                const parts = [];
+                if (kb.ctrl)  parts.push('Ctrl');
+                if (kb.alt)   parts.push('Alt');
+                if (kb.shift) parts.push('Shift');
+                parts.push(kb.key);
+                return parts.join('+');
+            }
+
+            // Key capture
+
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+            const keybindBtn = document.createElement('button');
+            keybindBtn.textContent = formatKeybind(_keybind);
+            keybindBtn.style.cssText = 'flex:1;padding:4px 8px;border-radius:6px;border:1px solid #2a6a6a;background:#0f3a3a;color:#a4f5f5;font-size:12px;cursor:pointer;font-family:monospace;text-align:center;';
+            keybindBtn.title = 'Click then press a key';
+
+            const clearBtn = document.createElement('button');
+            clearBtn.textContent = '✕';
+            clearBtn.style.cssText = 'padding:4px 7px;border-radius:6px;border:1px solid #5a2a2a;background:#3a0f0f;color:#f55a5a;font-size:11px;cursor:pointer;font-family:monospace;';
+            clearBtn.title = 'Clear keybind';
+
+            const MODIFIER_KEYS = new Set(['Control','Alt','Shift','Meta','AltGraph']);
+            let _kbListening = false, _kbHandler = null;
+            keybindBtn.addEventListener('click', function() {
+                if (_kbListening) return;
+                _kbListening = true;
+                keybindBtn.textContent = 'Press a key…';
+                keybindBtn.style.background = '#1a4a1a';
+                keybindBtn.style.borderColor = '#4a8a4a';
+                _kbHandler = function(ev) {
+                    if (MODIFIER_KEYS.has(ev.key)) return;
+                    ev.preventDefault(); ev.stopPropagation();
+                    if (ev.key !== 'Escape') {
+                        _keybind = { key: ev.key, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey };
+                        setMagicCircleValue('keybind', _keybind);
+                        keybindBtn.textContent = formatKeybind(_keybind);
+                    } else {
+                        keybindBtn.textContent = formatKeybind(_keybind);
+                    }
+                    keybindBtn.style.background = '#0f3a3a';
+                    keybindBtn.style.borderColor = '#2a6a6a';
+                    _kbListening = false;
+                    document.removeEventListener('keydown', _kbHandler, true);
+                    _kbHandler = null;
+                };
+                document.addEventListener('keydown', _kbHandler, true);
+            });
+            clearBtn.addEventListener('click', function() {
+                _keybind = null;
+                setMagicCircleValue('keybind', null);
+                keybindBtn.textContent = '— not set —';
+                if (_kbHandler) { document.removeEventListener('keydown', _kbHandler, true); _kbHandler = null; _kbListening = false; }
+            });
+
+            row.appendChild(keybindBtn);
+            row.appendChild(clearBtn);
+            body.appendChild(row);
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:9px;color:#3a6a6a;';
+            hint.textContent = 'Hold modifiers + press key to bind. Esc cancels.';
+            body.appendChild(hint);
+
+            kbGui.appendChild(body);
+            document.body.appendChild(kbGui);
+            kbGui.style.left = Math.round((window.innerWidth  - kbGui.offsetWidth)  / 2) + 'px';
+            kbGui.style.top  = Math.round((window.innerHeight - kbGui.offsetHeight) / 2) + 'px';
+        });
 
         // Mutations toggle
         popup.querySelector('.mutations-toggle-header').addEventListener('click', function(e) {
@@ -907,59 +1004,6 @@
                     const btn = buildPill(key, c); btn.textContent = label; combineWrap.appendChild(btn);
                 });
                 body.appendChild(combineWrap);
-
-                const keybindLbl = document.createElement('div');
-                keybindLbl.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:#4a8a8a;';
-                keybindLbl.textContent = 'Open Keybind';
-                body.appendChild(keybindLbl);
-
-                const keybindRow = document.createElement('div');
-                keybindRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
-
-                const keybindBtn = document.createElement('button');
-                keybindBtn.textContent = _keybind || '— not set —';
-                keybindBtn.style.cssText = 'flex:1;padding:3px 8px;border-radius:6px;border:1px solid #2a6a6a;background:#0f3a3a;color:#a4f5f5;font-size:11px;cursor:pointer;font-family:monospace;text-align:center;';
-                keybindBtn.title = 'Click then press a key to bind';
-
-                const keybindClearBtn = document.createElement('button');
-                keybindClearBtn.textContent = '✕';
-                keybindClearBtn.style.cssText = 'padding:3px 7px;border-radius:6px;border:1px solid #5a2a2a;background:#3a0f0f;color:#f55a5a;font-size:11px;cursor:pointer;font-family:monospace;';
-                keybindClearBtn.title = 'Clear keybind';
-
-                let _kbListening = false, _kbHandler = null;
-                keybindBtn.addEventListener('click', function() {
-                    if (_kbListening) return;
-                    _kbListening = true;
-                    keybindBtn.textContent = 'Press a key…';
-                    keybindBtn.style.background = '#1a4a1a';
-                    keybindBtn.style.borderColor = '#4a8a4a';
-                    _kbHandler = function(e) {
-                        e.preventDefault(); e.stopPropagation();
-                        if (e.key !== 'Escape') {
-                            _keybind = e.key;
-                            setMagicCircleValue('keybind', e.key);
-                            keybindBtn.textContent = e.key;
-                        } else {
-                            keybindBtn.textContent = _keybind || '— not set —';
-                        }
-                        keybindBtn.style.background = '#0f3a3a';
-                        keybindBtn.style.borderColor = '#2a6a6a';
-                        _kbListening = false;
-                        document.removeEventListener('keydown', _kbHandler, true);
-                        _kbHandler = null;
-                    };
-                    document.addEventListener('keydown', _kbHandler, true);
-                });
-                keybindClearBtn.addEventListener('click', function() {
-                    _keybind = null;
-                    setMagicCircleValue('keybind', null);
-                    keybindBtn.textContent = '— not set —';
-                    if (_kbHandler) { document.removeEventListener('keydown', _kbHandler, true); _kbHandler = null; _kbListening = false; }
-                });
-                keybindRow.appendChild(keybindBtn);
-                keybindRow.appendChild(keybindClearBtn);
-                body.appendChild(keybindRow);
-
                 cfgGui.appendChild(body);
 
                 cfgGui.querySelectorAll('.mut-cfg-pill').forEach(pill => {
@@ -987,6 +1031,7 @@
             existing.remove();
             document.getElementById('mut-config-gui')?.remove();
             document.getElementById('species-config-gui')?.remove();
+            document.getElementById('keybind-config-gui')?.remove();
             return;
         }
 
@@ -1086,11 +1131,18 @@
 
     // === Keybind listener ===
     _keybind = getMagicCircleValue('keybind', null);
+    if (typeof _keybind === 'string') _keybind = { key: _keybind, ctrl: false, alt: false, shift: false };
     document.addEventListener('keydown', function(e) {
-        if (!_keybind) return;
+        if (!_keybind?.key) return;
         const tag = document.activeElement?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        if (e.key === _keybind) { e.preventDefault(); showFarmStatsPopup(); }
+        if (e.key === _keybind.key &&
+            e.ctrlKey  === !!_keybind.ctrl &&
+            e.altKey   === !!_keybind.alt &&
+            e.shiftKey === !!_keybind.shift) {
+            e.preventDefault();
+            showFarmStatsPopup();
+        }
     });
 
     // === Init ===
