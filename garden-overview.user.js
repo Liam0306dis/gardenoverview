@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.05
+// @version      1.06
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -24,6 +24,7 @@
     const state = { atoms: {} };
     const targetWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
     console.log('[GardenOverview] unsafeWindow available:', typeof unsafeWindow !== 'undefined');
+    let _keybind = null;
     const hookedAtoms = new Set();
 
     // === Pet catalog capture ===
@@ -906,6 +907,59 @@
                     const btn = buildPill(key, c); btn.textContent = label; combineWrap.appendChild(btn);
                 });
                 body.appendChild(combineWrap);
+
+                const keybindLbl = document.createElement('div');
+                keybindLbl.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:#4a8a8a;';
+                keybindLbl.textContent = 'Open Keybind';
+                body.appendChild(keybindLbl);
+
+                const keybindRow = document.createElement('div');
+                keybindRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+                const keybindBtn = document.createElement('button');
+                keybindBtn.textContent = _keybind || '— not set —';
+                keybindBtn.style.cssText = 'flex:1;padding:3px 8px;border-radius:6px;border:1px solid #2a6a6a;background:#0f3a3a;color:#a4f5f5;font-size:11px;cursor:pointer;font-family:monospace;text-align:center;';
+                keybindBtn.title = 'Click then press a key to bind';
+
+                const keybindClearBtn = document.createElement('button');
+                keybindClearBtn.textContent = '✕';
+                keybindClearBtn.style.cssText = 'padding:3px 7px;border-radius:6px;border:1px solid #5a2a2a;background:#3a0f0f;color:#f55a5a;font-size:11px;cursor:pointer;font-family:monospace;';
+                keybindClearBtn.title = 'Clear keybind';
+
+                let _kbListening = false, _kbHandler = null;
+                keybindBtn.addEventListener('click', function() {
+                    if (_kbListening) return;
+                    _kbListening = true;
+                    keybindBtn.textContent = 'Press a key…';
+                    keybindBtn.style.background = '#1a4a1a';
+                    keybindBtn.style.borderColor = '#4a8a4a';
+                    _kbHandler = function(e) {
+                        e.preventDefault(); e.stopPropagation();
+                        if (e.key !== 'Escape') {
+                            _keybind = e.key;
+                            setMagicCircleValue('keybind', e.key);
+                            keybindBtn.textContent = e.key;
+                        } else {
+                            keybindBtn.textContent = _keybind || '— not set —';
+                        }
+                        keybindBtn.style.background = '#0f3a3a';
+                        keybindBtn.style.borderColor = '#2a6a6a';
+                        _kbListening = false;
+                        document.removeEventListener('keydown', _kbHandler, true);
+                        _kbHandler = null;
+                    };
+                    document.addEventListener('keydown', _kbHandler, true);
+                });
+                keybindClearBtn.addEventListener('click', function() {
+                    _keybind = null;
+                    setMagicCircleValue('keybind', null);
+                    keybindBtn.textContent = '— not set —';
+                    if (_kbHandler) { document.removeEventListener('keydown', _kbHandler, true); _kbHandler = null; _kbListening = false; }
+                });
+                keybindRow.appendChild(keybindBtn);
+                keybindRow.appendChild(keybindClearBtn);
+                body.appendChild(keybindRow);
+
                 cfgGui.appendChild(body);
 
                 cfgGui.querySelectorAll('.mut-cfg-pill').forEach(pill => {
@@ -1029,6 +1083,15 @@
         document.body.appendChild(btn);
         console.log('[GardenOverview] Trigger button added to page');
     }
+
+    // === Keybind listener ===
+    _keybind = getMagicCircleValue('keybind', null);
+    document.addEventListener('keydown', function(e) {
+        if (!_keybind) return;
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (e.key === _keybind) { e.preventDefault(); showFarmStatsPopup(); }
+    });
 
     // === Init ===
     console.log('[GardenOverview] Init, document.readyState:', document.readyState, '| document.body:', !!document.body);
