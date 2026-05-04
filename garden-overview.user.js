@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.07
+// @version      1.08
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -660,10 +660,10 @@
             if (mutConfig.dawnlit)  goodBars += mutBar('Dawnlit', '#f4a261', dawnlitHave, totalSlots);
         }
         if (combineDawnAmbercharged) {
-            goodBars += mutBar('Dawncharged / Ambercharged', '#e07b39', dawnAmberchargedHave, totalSlots);
+            goodBars += mutBar('Dawnbound / Amberbound', '#e07b39', dawnAmberchargedHave, totalSlots);
         } else {
-            if (mutConfig.dawncharged)  goodBars += mutBar('Dawncharged', '#e07b39', dawnchargedHave, totalSlots);
-            if (mutConfig.ambercharged) goodBars += mutBar('Ambercharged', '#c45e00', amberchargedHave, totalSlots);
+            if (mutConfig.dawncharged)  goodBars += mutBar('Dawnbound', '#e07b39', dawnchargedHave, totalSlots);
+            if (mutConfig.ambercharged) goodBars += mutBar('Amberbound', '#c45e00', amberchargedHave, totalSlots);
         }
         const badBars = (mutConfig.none ? badMutBar('None', '#c084e8', stats.noMutations, totalSlots) : '');
 
@@ -985,7 +985,7 @@
                 const pillsWrap = document.createElement('div');
                 pillsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
                 [['rainbow','Rainbow'],['gold','Gold'],['frozen','Frozen'],['thunderstruck','Thunderstruck'],['wet','Wet'],['chilled','Chilled'],
-                 ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawncharged'],['ambercharged','Ambercharged'],
+                 ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawnbound'],['ambercharged','Amberbound'],
                  ['none','None']
                 ].forEach(([key, label]) => {
                     const btn = buildPill(key, c); btn.textContent = label; pillsWrap.appendChild(btn);
@@ -999,7 +999,7 @@
                 const combineWrap = document.createElement('div');
                 combineWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
                 [['combineRainbow','Rainbow+Gold'],['combineAmberDawn','Amberlit+Dawnlit'],
-                 ['combineDawnAmbercharged','Dawncharged+Ambercharged'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
+                 ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
                 ].forEach(([key, label]) => {
                     const btn = buildPill(key, c); btn.textContent = label; combineWrap.appendChild(btn);
                 });
