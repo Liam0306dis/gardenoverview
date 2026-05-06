@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.08
+// @version      1.10
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -31,8 +31,7 @@
     let _asPetCatalog = null;
     (function() {
         const _seen = new WeakSet();
-        const _NativeObject = Object;
-        const _origKeys = _NativeObject.keys;
+        const _nativeKeys = Object.keys; // true native, saved before anyone touches it
 
         function _looksLikePetCatalog(obj, keys) {
             const common = ['Worm','Snail','Bee','Chicken','Bunny','Turkey','Goat'];
@@ -45,22 +44,43 @@
             if (!obj || typeof obj !== 'object' || _seen.has(obj)) return;
             _seen.add(obj);
             let keys;
-            try { keys = _origKeys.call(_NativeObject, obj); } catch(e) { return; }
-            if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) { _asPetCatalog = obj; return; }
+            try { keys = _nativeKeys.call(Object, obj); } catch(e) { return; }
+            if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) {
+                _asPetCatalog = obj;
+                console.log('[GardenOverview] Pet catalog captured');
+                return;
+            }
             if (depth >= 3) return;
             for (let i = 0; i < keys.length; i++) {
                 try { const v = obj[keys[i]]; if (v && typeof v === 'object') _scan(v, depth + 1); } catch(e) {}
             }
         }
 
+        // Use a getter/setter so any script that reassigns Object.keys
+        // automatically has our scan layered on top.
+        let _currentKeys = _nativeKeys;
         try {
-            _NativeObject.keys = function(obj) {
-                const result = _origKeys.call(_NativeObject, obj);
-                if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
+            Object.defineProperty(Object, 'keys', {
+                get() {
+                    return function(obj) {
+                        const result = _currentKeys.call(Object, obj);
+                        if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
+                        return result;
+                    };
+                },
+                set(fn) { _currentKeys = fn; },
+                configurable: true,
+            });
+            console.log('[GardenOverview] Object.keys override installed (sticky)');
+        } catch(e) {
+            // Fallback: plain override
+            console.warn('[GardenOverview] defineProperty on Object.keys failed, using plain override:', e);
+            Object.keys = function(obj) {
+                const result = _nativeKeys.call(Object, obj);
+                if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e2) {} }
                 return result;
             };
-            console.log('[GardenOverview] Object.keys override installed');
-        } catch(e) { console.warn('[GardenOverview] Pet catalog capture failed:', e); }
+        }
     })();
 
     // === GM helpers ===
@@ -85,13 +105,41 @@
         }
 
         hookedAtoms.add(hookKey);
-        const originalRead = atom.read;
-        atom.read = function(get) {
-            const value = originalRead.call(this, get);
-            if (!state.atoms[key]) console.log('[GardenOverview] Atom captured:', key);
+
+        // Wrap whatever fn is currently set, capturing the value for state.
+        const capture = (inner) => function(get) {
+            const value = inner.call(this, get);
+            if (!state.atoms[key]) {
+                console.log('[GardenOverview] Atom captured:', key, '→', JSON.stringify(value)?.slice(0, 300));
+            }
             state.atoms[key] = value;
             return value;
         };
+
+        // Use a getter/setter so any script that assigns atom.read automatically
+        // gets wrapped — no polling needed, no race window.
+        let _inner = atom.read;
+        try {
+            Object.defineProperty(atom, 'read', {
+                get() { return capture(_inner); },
+                set(fn)  {
+                    console.log('[GardenOverview] atom.read reassigned externally for:', key, '— wrapping');
+                    _inner = fn;
+                },
+                configurable: true,
+            });
+        } catch(e) {
+            // Fallback: plain assignment + interval if defineProperty fails
+            console.warn('[GardenOverview] defineProperty failed for', key, '— using interval fallback');
+            let myWrapper = capture(atom.read);
+            atom.read = myWrapper;
+            setInterval(() => {
+                if (atom.read !== myWrapper) {
+                    myWrapper = capture(atom.read);
+                    atom.read = myWrapper;
+                }
+            }, 500);
+        }
     }
 
     function initAtomHooks() {
@@ -528,7 +576,7 @@
 
     // === updatePopupContent ===
     function updatePopupContent(popup) {
-        if (!popup) popup = document.getElementById('farm-stats-popup');
+        if (!popup) popup = document.getElementById('go-farm-stats-popup');
         if (!popup) return;
         const stats = getFarmStatsData();
         if (!stats) return;
@@ -777,19 +825,19 @@
             e.preventDefault(); e.stopPropagation();
             if (popup.refreshInterval) clearInterval(popup.refreshInterval);
             popup.remove();
-            document.getElementById('mut-config-gui')?.remove();
-            document.getElementById('species-config-gui')?.remove();
-            document.getElementById('keybind-config-gui')?.remove();
+            document.getElementById('go-mut-config-gui')?.remove();
+            document.getElementById('go-species-config-gui')?.remove();
+            document.getElementById('go-keybind-config-gui')?.remove();
         };
 
         // Keybind config button
         popup.querySelector('.keybind-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
-            const existing = document.getElementById('keybind-config-gui');
+            const existing = document.getElementById('go-keybind-config-gui');
             if (existing) { existing.remove(); return; }
 
             const kbGui = document.createElement('div');
-            kbGui.id = 'keybind-config-gui';
+            kbGui.id = 'go-keybind-config-gui';
             kbGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 
             const hdr = document.createElement('div');
@@ -900,17 +948,17 @@
         // Species config button
         popup.querySelector('.species-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
-            const existing = document.getElementById('species-config-gui');
+            const existing = document.getElementById('go-species-config-gui');
             if (existing) { existing.remove(); return; }
 
             const speciesGui = document.createElement('div');
-            speciesGui.id = 'species-config-gui';
+            speciesGui.id = 'go-species-config-gui';
             speciesGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:230px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 
             function buildSpeciesPill(key, cfg) {
                 const on = !!cfg[key];
                 const btn = document.createElement('button');
-                btn.className = 'species-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
+                btn.className = 'go-species-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
                 btn.style.cssText = 'padding:2px 6px;border-radius:10px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:9px;cursor:pointer;font-family:monospace;white-space:nowrap;';
                 return btn;
             }
@@ -931,7 +979,7 @@
                 wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
                 Object.keys(stats.TRACKED_SPECIES_DEFAULTS).forEach(key => wrap.appendChild(buildSpeciesPill(key, c)));
                 body.appendChild(wrap); speciesGui.appendChild(body);
-                speciesGui.querySelectorAll('.species-pill').forEach(pill => {
+                speciesGui.querySelectorAll('.go-species-pill').forEach(pill => {
                     pill.addEventListener('click', function(ev) {
                         ev.preventDefault(); ev.stopPropagation();
                         const latest = Object.assign({}, stats.TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
@@ -950,17 +998,17 @@
         // Mutation config button
         popup.querySelector('.mut-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
-            const existing = document.getElementById('mut-config-gui');
+            const existing = document.getElementById('go-mut-config-gui');
             if (existing) { existing.remove(); return; }
 
             const cfgGui = document.createElement('div');
-            cfgGui.id = 'mut-config-gui';
+            cfgGui.id = 'go-mut-config-gui';
             cfgGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 
             function buildPill(key, cfg) {
                 const on = cfg[key] !== false;
                 const btn = document.createElement('button');
-                btn.className = 'mut-cfg-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
+                btn.className = 'go-mut-cfg-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
                 btn.style.cssText = 'padding:3px 10px;border-radius:12px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:11px;cursor:pointer;font-family:monospace;';
                 return btn;
             }
@@ -1006,7 +1054,7 @@
                 body.appendChild(combineWrap);
                 cfgGui.appendChild(body);
 
-                cfgGui.querySelectorAll('.mut-cfg-pill').forEach(pill => {
+                cfgGui.querySelectorAll('.go-mut-cfg-pill').forEach(pill => {
                     pill.addEventListener('click', function(ev) {
                         ev.preventDefault(); ev.stopPropagation();
                         const latest = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
@@ -1025,13 +1073,13 @@
 
     // === showFarmStatsPopup ===
     function showFarmStatsPopup() {
-        const existing = document.getElementById('farm-stats-popup');
+        const existing = document.getElementById('go-farm-stats-popup');
         if (existing) {
             if (existing.refreshInterval) clearInterval(existing.refreshInterval);
             existing.remove();
-            document.getElementById('mut-config-gui')?.remove();
-            document.getElementById('species-config-gui')?.remove();
-            document.getElementById('keybind-config-gui')?.remove();
+            document.getElementById('go-mut-config-gui')?.remove();
+            document.getElementById('go-species-config-gui')?.remove();
+            document.getElementById('go-keybind-config-gui')?.remove();
             return;
         }
 
@@ -1041,7 +1089,7 @@
         }
 
         const popup = document.createElement('div');
-        popup.id = 'farm-stats-popup';
+        popup.id = 'go-farm-stats-popup';
         popup.style.cssText = `
             position: fixed;
             background: #0d1117;
@@ -1093,7 +1141,7 @@
         });
 
         popup.refreshInterval = setInterval(() => {
-            if (!document.getElementById('farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
+            if (!document.getElementById('go-farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
             updatePopupContent(popup);
         }, 5000);
     }
@@ -1101,9 +1149,9 @@
     // === Trigger button ===
     function createTriggerButton() {
         console.log('[GardenOverview] createTriggerButton called, document.body:', !!document.body);
-        if (document.getElementById('garden-overview-trigger')) return;
+        if (document.getElementById('go-trigger')) return;
         const btn = document.createElement('button');
-        btn.id = 'garden-overview-trigger';
+        btn.id = 'go-trigger';
         btn.innerHTML = '&#x1F33F;';
         btn.title = 'Garden Overview';
         btn.style.cssText = `
