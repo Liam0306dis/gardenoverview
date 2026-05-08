@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.10
+// @version      1.11
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -175,7 +175,10 @@
         Pepper:        2,   Lemon:         3,   PassionFruit:  2,   DragonFruit:   2,
         Lychee:        2,   Sunflower:     2.5, Pear:          2,   Peach:         3,
         Date:          2,   Cacao:         2.5, Clover:        3,   FourLeafClover: 3,
-        Starweaver:    2,   DawnCelestial: 2.5, MoonCelestial: 2
+        Starweaver:    2,   DawnCelestial: 2.5, MoonCelestial: 2,
+        Daisy:         2.5, Lavender:      3,   Saffron:       3,
+        PurpleDaisy:   2.5, Eggplant:      2.5, Ube:           3,
+        Dawnbreaker:   3
     };
 
     const SPECIES_VALUES = {
@@ -190,20 +193,27 @@
         Chrysanthemum: 18000, Date: 15000,       Clover: 30,         FourLeafClover: 7777,
         Grape: 12500,       Pepper: 7220,        Lemon: 10000,       PassionFruit: 24500,
         DragonFruit: 24500, Cacao: 70000,        Lychee: 50000,      Sunflower: 750000,
-        Starweaver: 10000000, DawnCelestial: 11000000, MoonCelestial: 11000000
+        Starweaver: 10000000, DawnCelestial: 11000000, MoonCelestial: 11000000,
+        Daisy: 99,          Lavender: 20000,           Saffron: 60000,
+        PurpleDaisy: 9999,  Eggplant: 100000,          Ube: 2000000,
+        Dawnbreaker: 12000000
     };
 
     const TRACKED_SPECIES_DEFAULTS = {
-        Carrot: false, Cabbage: false, Strawberry: false, Aloe: false, Beet: false,
-        Rose: false, FavaBean: false, Delphinium: false, Blueberry: false, Apple: false,
-        OrangeTulip: false, Tomato: false, Daffodil: false, Corn: false, Watermelon: false,
-        Pumpkin: false, Echeveria: false, Pear: false, Gentian: false, Coconut: false,
-        PineTree: false, Banana: false, Lily: false, Camellia: false, Squash: false,
-        Peach: false, BurrosTail: false, Mushroom: false, Cactus: false, Bamboo: false,
-        Poinsettia: false, VioletCort: false, Chrysanthemum: false, Date: false,
-        Clover: false, FourLeafClover: false, Grape: false, Pepper: false, Lemon: false,
-        PassionFruit: false, DragonFruit: false, Cacao: false, Lychee: false,
-        Sunflower: false, Starweaver: true, DawnCelestial: true, MoonCelestial: true
+        Strawberry: false, Carrot: false,      Blueberry: false,     Tomato: false,
+        Clover: false,     FavaBean: false,    Corn: false,          Cabbage: false,
+        Apple: false,      Daisy: false,       Pear: false,          Rose: false,
+        Coconut: false,    Aloe: false,        Beet: false,          Delphinium: false,
+        OrangeTulip: false, Daffodil: false,   Banana: false,        Watermelon: false,
+        Squash: false,     Pumpkin: false,     Echeveria: false,     Camellia: false,
+        BurrosTail: false, Pepper: false,      FourLeafClover: false, Peach: false,
+        PurpleDaisy: false, Gentian: false,    Lemon: false,         Grape: false,
+        PineTree: false,   Date: false,        Chrysanthemum: false, Lavender: false,
+        Lily: false,       PassionFruit: false, DragonFruit: false,  Poinsettia: false,
+        Lychee: false,     Saffron: false,     Cacao: false,         Eggplant: false,
+        Mushroom: false,   Cactus: false,      Bamboo: false,        VioletCort: false,
+        Sunflower: false,  Ube: false,         Starweaver: true,     DawnCelestial: true,
+        MoonCelestial: true, Dawnbreaker: true
     };
 
     const MUTATION_DEFAULTS = {
