@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.11
+// @version      1.12
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -56,16 +56,21 @@
             }
         }
 
-        // Use a getter/setter so any script that reassigns Object.keys
-        // automatically has our scan layered on top.
         let _currentKeys = _nativeKeys;
+        let _inKeys = false;
         try {
             Object.defineProperty(Object, 'keys', {
                 get() {
                     return function(obj) {
-                        const result = _currentKeys.call(Object, obj);
-                        if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
-                        return result;
+                        if (_inKeys) return _nativeKeys.call(Object, obj);
+                        _inKeys = true;
+                        try {
+                            const result = _currentKeys.call(Object, obj);
+                            if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
+                            return result;
+                        } finally {
+                            _inKeys = false;
+                        }
                     };
                 },
                 set(fn) { _currentKeys = fn; },
@@ -73,12 +78,17 @@
             });
             console.log('[GardenOverview] Object.keys override installed (sticky)');
         } catch(e) {
-            // Fallback: plain override
             console.warn('[GardenOverview] defineProperty on Object.keys failed, using plain override:', e);
             Object.keys = function(obj) {
-                const result = _nativeKeys.call(Object, obj);
-                if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e2) {} }
-                return result;
+                if (_inKeys) return _nativeKeys.call(Object, obj);
+                _inKeys = true;
+                try {
+                    const result = _nativeKeys.call(Object, obj);
+                    if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e2) {} }
+                    return result;
+                } finally {
+                    _inKeys = false;
+                }
             };
         }
     })();
@@ -105,49 +115,23 @@
         }
 
         hookedAtoms.add(hookKey);
-
-        // Wrap whatever fn is currently set, capturing the value for state.
-        const capture = (inner) => function(get) {
-            const value = inner.call(this, get);
-            if (!state.atoms[key]) {
+        const originalRead = atom.read;
+        atom.read = function(get) {
+            const value = originalRead.call(this, get);
+            if (!(key in state.atoms)) {
                 console.log('[GardenOverview] Atom captured:', key, '→', JSON.stringify(value)?.slice(0, 300));
             }
             state.atoms[key] = value;
             return value;
         };
-
-        // Use a getter/setter so any script that assigns atom.read automatically
-        // gets wrapped — no polling needed, no race window.
-        let _inner = atom.read;
-        try {
-            Object.defineProperty(atom, 'read', {
-                get() { return capture(_inner); },
-                set(fn)  {
-                    console.log('[GardenOverview] atom.read reassigned externally for:', key, '— wrapping');
-                    _inner = fn;
-                },
-                configurable: true,
-            });
-        } catch(e) {
-            // Fallback: plain assignment + interval if defineProperty fails
-            console.warn('[GardenOverview] defineProperty failed for', key, '— using interval fallback');
-            let myWrapper = capture(atom.read);
-            atom.read = myWrapper;
-            setInterval(() => {
-                if (atom.read !== myWrapper) {
-                    myWrapper = capture(atom.read);
-                    atom.read = myWrapper;
-                }
-            }, 500);
-        }
     }
 
     function initAtomHooks() {
         const atoms = [
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/baseAtoms.ts/myUserSlotAtom',              'playerSlot'],
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/myAtoms.ts/myPrimitivePetSlotsAtom',        'activePets'],
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/miscAtoms.ts/friendBonusMultiplierAtom',    'friendBonus'],
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/inventoryAtoms.ts/myInventoryAtom',         'inventory'],
+            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/miscAtoms.ts/numFriendsInRoomAtom',         'numFriendsInRoom'],
         ];
 
         console.log('[GardenOverview] Waiting for jotaiAtomCache...');
@@ -256,7 +240,8 @@
         const trackedSpeciesConfig = Object.assign({}, TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
         const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
 
-        const FRIEND_BONUS = typeof state.atoms.friendBonus === 'number' ? state.atoms.friendBonus : 1.5;
+        const numFriendsInRoom = state.atoms.numFriendsInRoom;
+        const FRIEND_BONUS = typeof numFriendsInRoom === 'number' ? 1 + Math.min(numFriendsInRoom, 5) * 0.10 : null;
 
         const playerSlot = state.atoms.playerSlot;
         if (!playerSlot) return null;
@@ -447,7 +432,7 @@
                     if (weather && time) wt = WEATHER_TIME_COMBO[`${weather}+${time}`] || Math.max(WEATHER_MULT[weather], TIME_MULT[time]);
                     else if (weather) wt = WEATHER_MULT[weather];
                     else if (time)    wt = TIME_MULT[time];
-                    stats.totalFarmValue += Math.round(Math.round(color * wt) * (SPECIES_VALUES[tile.species] || 0) * (slot.targetScale || 1) * FRIEND_BONUS);
+                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (SPECIES_VALUES[tile.species] || 0) * (slot.targetScale || 1) * FRIEND_BONUS);
                 }
             });
         });
@@ -825,8 +810,8 @@
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#0a1f1f;border-top:1px solid #1e3a3a;">
-                <span style="font-size:11px;color:#4a8a8a;">Est. value &nbsp;<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">+${Math.round((stats.friendBonus - 1) * 100)}% bonus</span></span>
-                <span style="font-size:20px;font-weight:bold;color:#ffd84d;">${formatFarmValue(stats.totalFarmValue)}</span>
+                <span style="font-size:11px;color:#4a8a8a;">Est. value &nbsp;${stats.friendBonus !== null ? `<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">+${Math.round((stats.friendBonus - 1) * 100)}% bonus</span>` : `<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">bonus unknown</span>`}</span>
+                <span style="font-size:20px;font-weight:bold;color:#ffd84d;">${stats.friendBonus !== null ? formatFarmValue(stats.totalFarmValue) : '—'}</span>
             </div>
         `;
 
