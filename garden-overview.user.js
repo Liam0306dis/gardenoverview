@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.12
+// @version      1.13
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -558,6 +558,7 @@
             gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
             frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
+            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  stats.missingAmber),
             wet:         getGranterETA(activePets, 'RainDance',          10.0, stats.missingWet),
             chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  stats.missingChilled),
             cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, stats.boostsUntilMaxSize),
@@ -700,12 +701,12 @@
             goodBars += mutBar('Amberlit / Dawnlit', '#ff9a00', amberDawnHave, totalSlots);
         } else {
             if (mutConfig.amberlit) goodBars += mutBar('Amberlit', '#ff8c00', amberlitHave, totalSlots);
-            if (mutConfig.dawnlit)  goodBars += mutBar('Dawnlit', '#f4a261', dawnlitHave, totalSlots);
+            if (mutConfig.dawnlit)  goodBars += mutBar('Dawnlit', '#c084e8', dawnlitHave, totalSlots);
         }
         if (combineDawnAmbercharged) {
             goodBars += mutBar('Dawnbound / Amberbound', '#e07b39', dawnAmberchargedHave, totalSlots);
         } else {
-            if (mutConfig.dawncharged)  goodBars += mutBar('Dawnbound', '#e07b39', dawnchargedHave, totalSlots);
+            if (mutConfig.dawncharged)  goodBars += mutBar('Dawnbound', '#a855f7', dawnchargedHave, totalSlots);
             if (mutConfig.ambercharged) goodBars += mutBar('Amberbound', '#c45e00', amberchargedHave, totalSlots);
         }
         const badBars = (mutConfig.none ? badMutBar('None', '#c084e8', stats.noMutations, totalSlots) : '');
@@ -716,6 +717,7 @@
             + etaRow('&#x1F4A7; Wet', stats.missingWet, totalSlots, stats.granterETAs?.wet, '#4fc3f7')
             + etaRow('&#x2745;&#xFE0F; Chilled', stats.missingChilled, totalSlots, stats.granterETAs?.chilled, '#81d4fa')
             + etaRow('&#x2728; Amberlit', stats.missingAmber, totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
+            + etaRow('&#x1F305; Dawnlit', stats.missingAmber, totalSlots, stats.granterETAs?.dawnlit, '#c084e8')
             + etaRow('&#x1F331; Max Size', stats.boostsUntilMaxSize, null, stats.granterETAs?.cropSize, '#a78bfa', true)
             + etaRow('&#x1F41D; Bee Size', stats.boostsUntilMaxSizeBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
         const hasETAs = etaRows.trim() !== '';
