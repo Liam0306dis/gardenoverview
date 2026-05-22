@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.14
+// @version      1.15
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -48,6 +48,12 @@
             if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) {
                 _asPetCatalog = obj;
                 console.log('[GardenOverview] Pet catalog captured');
+                // Restore native Object.keys — wrapper overhead no longer needed
+                try {
+                    Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
+                } catch(e) {
+                    console.warn('[GardenOverview] Could not restore Object.keys:', e);
+                }
                 return;
             }
             if (depth >= 3) return;
