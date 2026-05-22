@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.13
+// @version      1.14
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -821,6 +821,7 @@
         popup.querySelector('.close-farm-stats-btn').onclick = function(e) {
             e.preventDefault(); e.stopPropagation();
             if (popup.refreshInterval) clearInterval(popup.refreshInterval);
+            popup._dragAbort?.abort();
             popup.remove();
             document.getElementById('go-mut-config-gui')?.remove();
             document.getElementById('go-species-config-gui')?.remove();
@@ -1073,6 +1074,7 @@
         const existing = document.getElementById('go-farm-stats-popup');
         if (existing) {
             if (existing.refreshInterval) clearInterval(existing.refreshInterval);
+            existing._dragAbort?.abort();
             existing.remove();
             document.getElementById('go-mut-config-gui')?.remove();
             document.getElementById('go-species-config-gui')?.remove();
@@ -1114,8 +1116,11 @@
             popup.style.top  = Math.round((window.innerHeight - popup.offsetHeight) / 2) + 'px';
         }
 
-        // Drag logic — listener on popup itself so it survives innerHTML refreshes
+        // Drag logic — listeners scoped to an AbortController so they clean up on close
         let dragging = false, dragOffX, dragOffY;
+        const dragAbort = new AbortController();
+        popup._dragAbort = dragAbort;
+        const { signal } = dragAbort;
         popup.addEventListener('mousedown', function(e) {
             const header = popup.firstElementChild;
             if (!header || !header.contains(e.target)) return;
@@ -1131,11 +1136,11 @@
             const maxTop  = window.innerHeight - popup.offsetHeight;
             popup.style.left = Math.max(0, Math.min(maxLeft, e.clientX - dragOffX)) + 'px';
             popup.style.top  = Math.max(0, Math.min(maxTop,  e.clientY - dragOffY)) + 'px';
-        });
+        }, { signal });
         document.addEventListener('mouseup', function() {
             if (dragging) setMagicCircleValue('go_popup_position', { left: popup.style.left, top: popup.style.top });
             dragging = false;
-        });
+        }, { signal });
 
         popup.refreshInterval = setInterval(() => {
             if (!document.getElementById('go-farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
