@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.15
+// @version      1.16
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -272,7 +272,7 @@
             noMutations: 0, notMature: 0, notMaxSize: 0,
             matureCount: 0, readyNow: 0,
             boostsUntilMaxSize: 0, totalFarmValue: 0,
-            plantCounts: {}, naturalMaxSize: [],
+            plantCounts: {},
             maxEndTime: 0, minEndTime: Infinity,
         };
 
@@ -331,31 +331,6 @@
         const turtleExpectations = getTurtleExpectations(activePets);
         const hasTurtleBoost = turtleExpectations.expectedMinutesRemoved > 0;
 
-        const NATURAL_MAX_SIZE_DURATIONS = {
-            Carrot: [12000], Strawberry: [25000,30000,35000,40000,45000], Aloe: [112500],
-            Delphinium: [75000], Blueberry: [55000,66000,77000,88000,99000],
-            Apple: [13500000,16200000,18900000,21600000,24300000,27000000,29700000],
-            OrangeTulip: [24000], Tomato: [100000,120000], Daffodil: [150000], Corn: [75000],
-            Watermelon: [2160000], Pumpkin: [6300000], Echeveria: [330000], Cabbage: [135000],
-            Beet: [180000], Rose: [1200000], FavaBean: [720000], Gentian: [270000],
-            Coconut: [12600000,14400000,16200000,18000000,19800000,21600000,23400000],
-            Banana: [9900000,12150000,14400000,16650000,18900000], PineTree: [50400000],
-            Lily: [660000],
-            Camellia: [32400000,37800000,43200000,48600000,54000000,59400000,64800000,70200000],
-            Squash: [600000,700000,800000], BurrosTail: [300000,350000], Mushroom: [302400000],
-            Cactus: [16200000], Bamboo: [86400000], Poinsettia: [8100000,10800000],
-            Chrysanthemum: [35100000,40500000,45900000,51300000,56700000,62100000,67500000],
-            Grape: [2250000],
-            Pepper: [1500000,1800000,2100000,2400000,2700000,3000000,3300000,3600000,3900000],
-            Lemon: [12600000,14400000,16200000,18000000,19800000,21600000],
-            PassionFruit: [6750000,8100000],
-            DragonFruit: [2250000,2700000,3150000,3600000,4050000,4500000,4950000],
-            Lychee: [4500000,5400000,6300000,7200000,8100000,9000000],
-            Sunflower: [54000000], VioletCort: [226800000],
-            Starweaver: [216000000], DawnCelestial: [259200000],
-            MoonCelestial: [216000000,259200000,302400000]
-        };
-
         Object.entries(tileObjects).forEach(([tileId, tile]) => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
 
@@ -411,17 +386,6 @@
                     if (!hasFrozenMut && !hasThunderstruck && !hasWet && !hasChilled) stats.missingFrozenAndThunderstruck++;
                 }
                 if (isTargetSpecies && mutations.length === 0) stats.noMutations++;
-
-                // Natural max size detection
-                if (maxScale) {
-                    const isMaxScale = slot.targetScale === maxScale;
-                    if (isMaxScale) {
-                        const naturalDurations = NATURAL_MAX_SIZE_DURATIONS[tile.species];
-                        if (naturalDurations && naturalDurations[slotIndex] === (slot.endTime - slot.startTime)) {
-                            stats.naturalMaxSize.push({ species: tile.species, tileId, slotIndex, mutations, targetScale: slot.targetScale });
-                        }
-                    }
-                }
 
                 if (isTargetSpecies) {
                     let color = 1;
@@ -750,16 +714,6 @@
             growthHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;">${cards.join('')}</div>`;
         }
 
-        const naturalMaxHTML = stats.naturalMaxSize.length > 0 ? `
-            <div style="padding:10px 16px;border-top:1px solid #1a2a2a;">
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#4a8a8a;margin-bottom:8px;">Natural Max Size</div>
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:5px 15px;font-size:12px;padding-left:10px;">
-                    ${stats.naturalMaxSize.map(n => `
-                        <div style="color:#7ab8b8;">${n.species}</div>
-                        <div style="text-align:right;color:#7ab8b8;">${n.mutations.length > 0 ? n.mutations.join(', ') : 'No mutations'}</div>
-                    `).join('')}
-                </div>
-            </div>` : '';
 
         popup.innerHTML = `
             <div style="background:#0a1f1f;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;cursor:move;">
@@ -796,8 +750,6 @@
                     ${goodBars}${badBars}
                 </div>
             </div>
-
-            ${naturalMaxHTML}
 
             <div style="padding:10px 16px;border-bottom:1px solid #1a2a2a;">
                 <div class="plant-toggle-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
