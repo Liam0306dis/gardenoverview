@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.16
+// @version      1.17
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -174,17 +174,17 @@
     const SPECIES_VALUES = {
         Carrot: 20,         Cabbage: 42,        Strawberry: 14,     Aloe: 310,
         Beet: 350,          Rose: 300,           FavaBean: 30,       Delphinium: 530,
-        Blueberry: 23,      Apple: 73,           OrangeTulip: 767,   Tomato: 27,
+        Blueberry: 23,      Apple: 800,          OrangeTulip: 767,   Tomato: 27,
         Daffodil: 1090,     Corn: 36,            Watermelon: 2708,   Pumpkin: 3700,
-        Echeveria: 4600,    Pear: 250,           Gentian: 10000,     Coconut: 302,
-        PineTree: 15000,    Banana: 1750,        Lily: 20123,        Camellia: 4875,
-        Squash: 3500,       Peach: 9000,         BurrosTail: 6000,   Mushroom: 160000,
-        Cactus: 261000,     Bamboo: 500000,      Poinsettia: 30000,  VioletCort: 600000,
+        Echeveria: 3200,    Pear: 3000,          Gentian: 10000,     Coconut: 12000,
+        PineTree: 75000,    Banana: 1750,        Lily: 20123,        Camellia: 4875,
+        Squash: 7000,       Peach: 9000,         BurrosTail: 6000,   Mushroom: 160000,
+        Cactus: 220000,     Bamboo: 500000,      Poinsettia: 30000,  VioletCort: 600000,
         Chrysanthemum: 18000, Date: 15000,       Clover: 30,         FourLeafClover: 7777,
-        Grape: 12500,       Pepper: 7220,        Lemon: 10000,       PassionFruit: 24500,
-        DragonFruit: 24500, Cacao: 70000,        Lychee: 50000,      Sunflower: 750000,
+        Grape: 50000,       Pepper: 7000,        Lemon: 50000,       PassionFruit: 200000,
+        DragonFruit: 30000, Cacao: 150000,       Lychee: 50000,      Sunflower: 750000,
         Starweaver: 10000000, DawnCelestial: 11000000, MoonCelestial: 11000000,
-        Daisy: 99,          Lavender: 20000,           Saffron: 60000,
+        Daisy: 130,         Lavender: 20000,           Saffron: 50000,
         PurpleDaisy: 9999,  Eggplant: 100000,          Ube: 2000000,
         Dawnbreaker: 12000000
     };
