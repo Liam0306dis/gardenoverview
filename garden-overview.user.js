@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.17
+// @version      1.18
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -27,8 +27,9 @@
     let _keybind = null;
     const hookedAtoms = new Set();
 
-    // === Pet catalog capture ===
+    // === Pet + Plant catalog capture ===
     let _asPetCatalog = null;
+    let _asPlantCatalog = null;
     (function() {
         const _seen = new WeakSet();
         const _nativeKeys = Object.keys; // true native, saved before anyone touches it
@@ -40,6 +41,22 @@
             return sample && typeof sample === 'object' && 'coinsToFullyReplenishHunger' in sample && 'diet' in sample && Array.isArray(sample.diet);
         }
 
+        function _looksLikePlantCatalog(obj, keys) {
+            const common = ['Carrot','Cabbage','Strawberry','Aloe','Beet','Rose','Clover'];
+            if (common.filter(function(k) { return keys.indexOf(k) !== -1; }).length < 3) return false;
+            const sample = obj[common.find(function(k) { return keys.indexOf(k) !== -1; })];
+            return sample && typeof sample === 'object' && 'crop' in sample && sample.crop && 'baseSellPrice' in sample.crop;
+        }
+
+        function _tryRestoreKeys() {
+            if (!_asPetCatalog || !_asPlantCatalog) return;
+            try {
+                Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
+            } catch(e) {
+                console.warn('[GardenOverview] Could not restore Object.keys:', e);
+            }
+        }
+
         function _scan(obj, depth) {
             if (!obj || typeof obj !== 'object' || _seen.has(obj)) return;
             _seen.add(obj);
@@ -48,12 +65,13 @@
             if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) {
                 _asPetCatalog = obj;
                 console.log('[GardenOverview] Pet catalog captured');
-                // Restore native Object.keys — wrapper overhead no longer needed
-                try {
-                    Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
-                } catch(e) {
-                    console.warn('[GardenOverview] Could not restore Object.keys:', e);
-                }
+                _tryRestoreKeys();
+                return;
+            }
+            if (!_asPlantCatalog && _looksLikePlantCatalog(obj, keys)) {
+                _asPlantCatalog = obj;
+                console.log('[GardenOverview] Plant catalog captured (' + keys.length + ' species)');
+                _tryRestoreKeys();
                 return;
             }
             if (depth >= 3) return;
@@ -72,7 +90,7 @@
                         _inKeys = true;
                         try {
                             const result = _currentKeys.call(Object, obj);
-                            if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
+                            if (!_asPetCatalog || !_asPlantCatalog) { try { _scan(obj, 0); } catch(e) {} }
                             return result;
                         } finally {
                             _inKeys = false;
@@ -90,7 +108,7 @@
                 _inKeys = true;
                 try {
                     const result = _nativeKeys.call(Object, obj);
-                    if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e2) {} }
+                    if (!_asPetCatalog || !_asPlantCatalog) { try { _scan(obj, 0); } catch(e2) {} }
                     return result;
                 } finally {
                     _inKeys = false;
@@ -98,6 +116,9 @@
             };
         }
     })();
+
+    function _getPlantSellPrice(species) { return _asPlantCatalog?.[species]?.crop?.baseSellPrice; }
+    function _getPlantMaxScale(species)  { return _asPlantCatalog?.[species]?.crop?.maxScale; }
 
     // === GM helpers ===
     function setMagicCircleValue(key, value) {
@@ -153,58 +174,12 @@
     }
 
     // === Constants ===
-    const SPECIES_MAX_SCALES = {
-        Carrot:        3,   Cabbage:       3,   Strawberry:    2,   Aloe:          2.5,
-        Beet:          3,   Rose:          4,   FavaBean:      3,   Delphinium:    3,
-        Blueberry:     2,   Apple:         2,   OrangeTulip:   3,   Tomato:        2,
-        Daffodil:      3,   Corn:          2,   Watermelon:    3,   Pumpkin:       3,
-        Echeveria:     2.75, Gentian:      3,   Coconut:       3,   Banana:        1.7,
-        PineTree:      3.5, Lily:          2.75, Camellia:     2.5, Squash:        2.5,
-        BurrosTail:    2.5, Mushroom:      3.5, Cactus:        1.8, Bamboo:        2,
-        Poinsettia:    2,   VioletCort:    3.5, Chrysanthemum: 2.75, Grape:        2,
-        Pepper:        2,   Lemon:         3,   PassionFruit:  2,   DragonFruit:   2,
-        Lychee:        2,   Sunflower:     2.5, Pear:          2,   Peach:         3,
-        Date:          2,   Cacao:         2.5, Clover:        3,   FourLeafClover: 3,
-        Starweaver:    2,   DawnCelestial: 2.5, MoonCelestial: 2,
-        Daisy:         2.5, Lavender:      3,   Saffron:       3,
-        PurpleDaisy:   2.5, Eggplant:      2.5, Ube:           3,
-        Dawnbreaker:   3
-    };
 
-    const SPECIES_VALUES = {
-        Carrot: 20,         Cabbage: 42,        Strawberry: 14,     Aloe: 310,
-        Beet: 350,          Rose: 300,           FavaBean: 30,       Delphinium: 530,
-        Blueberry: 23,      Apple: 800,          OrangeTulip: 767,   Tomato: 27,
-        Daffodil: 1090,     Corn: 36,            Watermelon: 2708,   Pumpkin: 3700,
-        Echeveria: 3200,    Pear: 3000,          Gentian: 10000,     Coconut: 12000,
-        PineTree: 75000,    Banana: 1750,        Lily: 20123,        Camellia: 4875,
-        Squash: 7000,       Peach: 9000,         BurrosTail: 6000,   Mushroom: 160000,
-        Cactus: 220000,     Bamboo: 500000,      Poinsettia: 30000,  VioletCort: 600000,
-        Chrysanthemum: 18000, Date: 15000,       Clover: 30,         FourLeafClover: 7777,
-        Grape: 50000,       Pepper: 7000,        Lemon: 50000,       PassionFruit: 200000,
-        DragonFruit: 30000, Cacao: 150000,       Lychee: 50000,      Sunflower: 750000,
-        Starweaver: 10000000, DawnCelestial: 11000000, MoonCelestial: 11000000,
-        Daisy: 130,         Lavender: 20000,           Saffron: 50000,
-        PurpleDaisy: 9999,  Eggplant: 100000,          Ube: 2000000,
-        Dawnbreaker: 12000000
-    };
-
-    const TRACKED_SPECIES_DEFAULTS = {
-        Strawberry: false, Carrot: false,      Blueberry: false,     Tomato: false,
-        Clover: false,     FavaBean: false,    Corn: false,          Cabbage: false,
-        Apple: false,      Daisy: false,       Pear: false,          Rose: false,
-        Coconut: false,    Aloe: false,        Beet: false,          Delphinium: false,
-        OrangeTulip: false, Daffodil: false,   Banana: false,        Watermelon: false,
-        Squash: false,     Pumpkin: false,     Echeveria: false,     Camellia: false,
-        BurrosTail: false, Pepper: false,      FourLeafClover: false, Peach: false,
-        PurpleDaisy: false, Gentian: false,    Lemon: false,         Grape: false,
-        PineTree: false,   Date: false,        Chrysanthemum: false, Lavender: false,
-        Lily: false,       PassionFruit: false, DragonFruit: false,  Poinsettia: false,
-        Lychee: false,     Saffron: false,     Cacao: false,         Eggplant: false,
-        Mushroom: false,   Cactus: false,      Bamboo: false,        VioletCort: false,
-        Sunflower: false,  Ube: false,         Starweaver: true,     DawnCelestial: true,
-        MoonCelestial: true, Dawnbreaker: true
-    };
+    const _DEFAULT_TRACKED_TRUE = new Set(['Starweaver', 'DawnCelestial', 'MoonCelestial', 'Dawnbreaker']);
+    function _getTrackedSpeciesDefaults() {
+        if (!_asPlantCatalog) return {};
+        return Object.fromEntries(Object.keys(_asPlantCatalog).map(function(s) { return [s, _DEFAULT_TRACKED_TRUE.has(s)]; }));
+    }
 
     const MUTATION_DEFAULTS = {
         wet: false, chilled: false, frozen: true,
@@ -243,7 +218,7 @@
             "Thunderstruck+Ambershine": 10, "Thunderstruck+Amberbound": 14, "Thunderstruck+Ambercharged": 14
         };
 
-        const trackedSpeciesConfig = Object.assign({}, TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
+        const trackedSpeciesConfig = Object.assign({}, _getTrackedSpeciesDefaults(), getMagicCircleValue('tracked_species', null) || {});
         const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
 
         const numFriendsInRoom = state.atoms.numFriendsInRoom;
@@ -340,7 +315,7 @@
             }
 
             const isTargetSpecies = trackedSpecies.includes(tile.species);
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
 
             tile.slots.forEach((slot, slotIndex) => {
                 const mutations = slot.mutations || [];
@@ -402,7 +377,7 @@
                     if (weather && time) wt = WEATHER_TIME_COMBO[`${weather}+${time}`] || Math.max(WEATHER_MULT[weather], TIME_MULT[time]);
                     else if (weather) wt = WEATHER_MULT[weather];
                     else if (time)    wt = TIME_MULT[time];
-                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (SPECIES_VALUES[tile.species] || 0) * (slot.targetScale || 1) * FRIEND_BONUS);
+                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (_getPlantSellPrice(tile.species) ?? 0) * (slot.targetScale || 1) * FRIEND_BONUS);
                 }
             });
         });
@@ -480,7 +455,7 @@
         Object.values(tileObjects).forEach(tile => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
             if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
             tile.slots.forEach(slot => {
                 let s = slot.targetScale || 1;
                 if (s < maxScale) {
@@ -511,7 +486,7 @@
         Object.values(tileObjects).forEach(tile => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
             if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
             tile.slots.forEach(slot => {
                 let s = slot.targetScale || 1;
                 if (s < maxScale) {
@@ -535,7 +510,7 @@
             cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
         };
         stats.trackedSpecies = trackedSpecies;
-        stats.TRACKED_SPECIES_DEFAULTS = TRACKED_SPECIES_DEFAULTS;
+        stats.TRACKED_SPECIES_DEFAULTS = _getTrackedSpeciesDefaults();
         stats.friendBonus = FRIEND_BONUS;
         return stats;
     }
