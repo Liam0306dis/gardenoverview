@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.18
+// @version      1.19
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -697,6 +697,7 @@
                     <button class="species-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked plants">&#x1F33F;</button>
                     <button class="mut-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked mutations">&#x2699;</button>
                     <button class="keybind-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure keybind">&#x2328;</button>
+                    <button class="zoom-toggle-btn" style="background:${getMagicCircleValue('farm_stats_zoom', 1) !== 1 ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)'};border:none;color:#7ab8b8;cursor:pointer;font-size:8px;border-radius:4px;width:32px;height:24px;line-height:1;font-family:monospace;" title="Cycle zoom">${getMagicCircleValue('farm_stats_zoom', 1)}×</button>
                     <button class="close-farm-stats-btn" style="background:#c0392b;color:white;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;">&#x2715;</button>
                 </div>
             </div>
@@ -749,6 +750,24 @@
                 <span style="font-size:20px;font-weight:bold;color:#ffd84d;">${stats.friendBonus !== null ? formatFarmValue(stats.totalFarmValue) : '—'}</span>
             </div>
         `;
+
+        // Apply saved zoom state
+        const _ZOOM_CYCLE = [1, 1.25, 1.5];
+        const _currentZoom = getMagicCircleValue('farm_stats_zoom', 1);
+        popup.style.transform       = _currentZoom !== 1 ? 'scale(' + _currentZoom + ')' : '';
+        popup.style.transformOrigin = 'top left';
+
+        popup.querySelector('.zoom-toggle-btn').onclick = function(e) {
+            e.preventDefault(); e.stopPropagation();
+            const cur  = getMagicCircleValue('farm_stats_zoom', 1);
+            const idx  = _ZOOM_CYCLE.indexOf(cur);
+            const next = _ZOOM_CYCLE[(idx === -1 ? 0 : idx + 1) % _ZOOM_CYCLE.length];
+            setMagicCircleValue('farm_stats_zoom', next);
+            popup.style.transform = next !== 1 ? 'scale(' + next + ')' : '';
+            const btn = popup.querySelector('.zoom-toggle-btn');
+            btn.textContent      = next + '×';
+            btn.style.background = next !== 1 ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)';
+        };
 
         // Close button
         popup.querySelector('.close-farm-stats-btn').onclick = function(e) {
