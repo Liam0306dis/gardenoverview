@@ -239,18 +239,7 @@
         const tileObjects = playerSlot.data?.garden?.tileObjects;
         if (!tileObjects) return null;
 
-        // Pre-scan: collect slot species not in the plant catalog
-        // (e.g. FourLeafClover only exists as a slot.species on Clover tiles)
-        const _catalogSpeciesSet = _asPlantCatalog ? new Set(Object.keys(_asPlantCatalog)) : new Set();
-        const _extraSlotSpecies = {};
-        Object.values(tileObjects).forEach(function(tile) {
-            if (tile.objectType !== 'plant' || !tile.slots || !tile.slots.length) return;
-            tile.slots.forEach(function(slot) {
-                if (slot.species && !_catalogSpeciesSet.has(slot.species)) _extraSlotSpecies[slot.species] = false;
-            });
-        });
-
-        const _defaults = Object.assign({}, _getTrackedSpeciesDefaults(), _extraSlotSpecies);
+        const _defaults = _getTrackedSpeciesDefaults();
         const trackedSpeciesConfig = Object.assign({}, _defaults, getMagicCircleValue('tracked_species', null) || {});
         const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
 
