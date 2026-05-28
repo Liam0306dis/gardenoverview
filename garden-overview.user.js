@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.20
+// @version      1.21
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -346,7 +346,7 @@
                 if (isTargetSpecies && mutations.includes(GOLD_MUTATION)) stats.goldCount++;
                 if (isTargetSpecies && !mutations.includes(GOLD_MUTATION) && !mutations.includes(RAINBOW_MUTATION)) stats.missingGold++;
                 if (isTargetSpecies && mutations.includes(FROZEN_MUTATION)) stats.frozenCount++;
-                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck') && !mutations.includes('Wet') && !mutations.includes('Chilled')) stats.missingFrozen++;
+                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck')) stats.missingFrozen++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit') && !mutations.includes('Dawncharged')) stats.missingAmber++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION)) stats.missingAmbercharged++;
                 if (isTargetSpecies) {
