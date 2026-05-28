@@ -11,8 +11,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
-// @updateURL    https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overview.user.js
-// @downloadURL  https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overview.user.js
+// @updateURL    https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overviewtest.user.js
+// @downloadURL  https://github.com/Liam0306dis/gardenoverview/raw/refs/heads/main/garden-overviewtest.user.js
 // @run-at       document-start
 // ==/UserScript==
 (function() {
