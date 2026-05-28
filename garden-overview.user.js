@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.21
+// @version      1.22
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -230,9 +230,6 @@
             "Thunderstruck+Ambershine": 10, "Thunderstruck+Amberbound": 14, "Thunderstruck+Ambercharged": 14
         };
 
-        const trackedSpeciesConfig = Object.assign({}, _getTrackedSpeciesDefaults(), getMagicCircleValue('tracked_species', null) || {});
-        const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
-
         const numFriendsInRoom = state.atoms.numFriendsInRoom;
         const FRIEND_BONUS = typeof numFriendsInRoom === 'number' ? 1 + Math.min(numFriendsInRoom, 5) * 0.10 : null;
 
@@ -241,6 +238,21 @@
 
         const tileObjects = playerSlot.data?.garden?.tileObjects;
         if (!tileObjects) return null;
+
+        // Pre-scan: collect slot species not in the plant catalog
+        // (e.g. FourLeafClover only exists as a slot.species on Clover tiles)
+        const _catalogSpeciesSet = _asPlantCatalog ? new Set(Object.keys(_asPlantCatalog)) : new Set();
+        const _extraSlotSpecies = {};
+        Object.values(tileObjects).forEach(function(tile) {
+            if (tile.objectType !== 'plant' || !tile.slots || !tile.slots.length) return;
+            tile.slots.forEach(function(slot) {
+                if (slot.species && !_catalogSpeciesSet.has(slot.species)) _extraSlotSpecies[slot.species] = false;
+            });
+        });
+
+        const _defaults = Object.assign({}, _getTrackedSpeciesDefaults(), _extraSlotSpecies);
+        const trackedSpeciesConfig = Object.assign({}, _defaults, getMagicCircleValue('tracked_species', null) || {});
+        const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
 
         const currentTime = Date.now();
         const activePets = state.atoms.activePets || [];
@@ -323,16 +335,16 @@
 
             if (trackedSpecies.includes(tile.species)) {
                 stats.plantCounts[tile.species] = (stats.plantCounts[tile.species] || 0) + 1;
-                stats.plantCounts[tile.species + 'Slots'] = (stats.plantCounts[tile.species + 'Slots'] || 0) + tile.slots.length;
             }
 
-            const isTargetSpecies = trackedSpecies.includes(tile.species);
-            const maxScale = _getPlantMaxScale(tile.species);
-
             tile.slots.forEach((slot, slotIndex) => {
+                const slotSpecies = slot.species || tile.species;
+                const isTargetSpecies = trackedSpecies.includes(slotSpecies);
+                const maxScale = _getPlantMaxScale(slotSpecies);
                 const mutations = slot.mutations || [];
 
                 if (isTargetSpecies) {
+                    stats.plantCounts[slotSpecies + 'Slots'] = (stats.plantCounts[slotSpecies + 'Slots'] || 0) + 1;
                     if (slot.endTime > stats.maxEndTime) stats.maxEndTime = slot.endTime;
                     if (slot.endTime > currentTime && slot.endTime < stats.minEndTime) stats.minEndTime = slot.endTime;
                     if (currentTime < slot.endTime) stats.notMature++;
@@ -350,9 +362,8 @@
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit') && !mutations.includes('Dawncharged')) stats.missingAmber++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION)) stats.missingAmbercharged++;
                 if (isTargetSpecies) {
-                    const key = tile.species;
-                    if (mutations.includes('Rainbow')) stats.plantCounts[`${key}Rainbow`] = (stats.plantCounts[`${key}Rainbow`] || 0) + 1;
-                    if (mutations.includes('Gold'))    stats.plantCounts[`${key}Gold`]    = (stats.plantCounts[`${key}Gold`]    || 0) + 1;
+                    if (mutations.includes('Rainbow')) stats.plantCounts[`${slotSpecies}Rainbow`] = (stats.plantCounts[`${slotSpecies}Rainbow`] || 0) + 1;
+                    if (mutations.includes('Gold'))    stats.plantCounts[`${slotSpecies}Gold`]    = (stats.plantCounts[`${slotSpecies}Gold`]    || 0) + 1;
                 }
                 if (isTargetSpecies) {
                     const hasThunderstruck = mutations.includes('Thunderstruck');
@@ -389,7 +400,7 @@
                     if (weather && time) wt = WEATHER_TIME_COMBO[`${weather}+${time}`] || Math.max(WEATHER_MULT[weather], TIME_MULT[time]);
                     else if (weather) wt = WEATHER_MULT[weather];
                     else if (time)    wt = TIME_MULT[time];
-                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (_getPlantSellPrice(tile.species) ?? 0) * (slot.targetScale || 1) * FRIEND_BONUS);
+                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (_getPlantSellPrice(slotSpecies) ?? 0) * (slot.targetScale || 1) * FRIEND_BONUS);
                 }
             });
         });
@@ -522,7 +533,7 @@
             cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
         };
         stats.trackedSpecies = trackedSpecies;
-        stats.TRACKED_SPECIES_DEFAULTS = _getTrackedSpeciesDefaults();
+        stats.TRACKED_SPECIES_DEFAULTS = _defaults;
         stats.friendBonus = FRIEND_BONUS;
         return stats;
     }
@@ -751,8 +762,8 @@
                         <span style="color:#7ab8b8;">Total Slots</span>
                         <span style="color:#7ab8b8;font-weight:bold;">${totalSlots}</span>
                     </div>
-                    ${stats.trackedSpecies.filter(s => (stats.plantCounts[s] || 0) > 0).map(s =>
-                        `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;"><span style="color:#7ab8b8;">${s}</span><span style="color:#7ab8b8;">${stats.plantCounts[s]}</span></div>`
+                    ${stats.trackedSpecies.filter(s => (stats.plantCounts[s + 'Slots'] || 0) > 0).map(s =>
+                        `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;"><span style="color:#7ab8b8;">${s}</span><span style="color:#7ab8b8;">${stats.plantCounts[s + 'Slots']}</span></div>`
                     ).join('')}
                 </div>
             </div>
