@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.02
+// @version      1.19
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
+// @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
 // @match        https://magicgarden.gg/r/*
 // @match        https://starweaver.org/r/*
@@ -23,14 +24,15 @@
     const state = { atoms: {} };
     const targetWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
     console.log('[GardenOverview] unsafeWindow available:', typeof unsafeWindow !== 'undefined');
+    let _keybind = null;
     const hookedAtoms = new Set();
 
-    // === Pet catalog capture ===
+    // === Pet + Plant catalog capture ===
     let _asPetCatalog = null;
+    let _asPlantCatalog = null;
     (function() {
         const _seen = new WeakSet();
-        const _NativeObject = Object;
-        const _origKeys = _NativeObject.keys;
+        const _nativeKeys = Object.keys; // true native, saved before anyone touches it
 
         function _looksLikePetCatalog(obj, keys) {
             const common = ['Worm','Snail','Bee','Chicken','Bunny','Turkey','Goat'];
@@ -39,27 +41,96 @@
             return sample && typeof sample === 'object' && 'coinsToFullyReplenishHunger' in sample && 'diet' in sample && Array.isArray(sample.diet);
         }
 
+        function _looksLikePlantCatalog(obj, keys) {
+            const common = ['Carrot','Cabbage','Strawberry','Aloe','Beet','Rose','Clover'];
+            if (common.filter(function(k) { return keys.indexOf(k) !== -1; }).length < 3) return false;
+            const sample = obj[common.find(function(k) { return keys.indexOf(k) !== -1; })];
+            return sample && typeof sample === 'object' && 'crop' in sample && sample.crop && 'baseSellPrice' in sample.crop;
+        }
+
+        let _restoreKeysTimer = null;
+        function _tryRestoreKeys() {
+            if (!_asPetCatalog || !_asPlantCatalog) return;
+            // Delay restore so a larger plant catalog can still be captured if the first was partial
+            if (_restoreKeysTimer) return;
+            _restoreKeysTimer = setTimeout(function() {
+                const finalCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
+                console.log('[GardenOverview] Restoring Object.keys. Final plant catalog: ' + finalCount + ' species.');
+                try {
+                    Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
+                } catch(e) {
+                    console.warn('[GardenOverview] Could not restore Object.keys:', e);
+                }
+            }, 5000);
+        }
+
         function _scan(obj, depth) {
             if (!obj || typeof obj !== 'object' || _seen.has(obj)) return;
             _seen.add(obj);
             let keys;
-            try { keys = _origKeys.call(_NativeObject, obj); } catch(e) { return; }
-            if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) { _asPetCatalog = obj; return; }
+            try { keys = _nativeKeys.call(Object, obj); } catch(e) { return; }
+            if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) {
+                _asPetCatalog = obj;
+                console.log('[GardenOverview] Pet catalog captured (' + keys.length + ' species). Sample keys:', keys.slice(0, 10));
+                _tryRestoreKeys();
+                return;
+            }
+            if (_looksLikePlantCatalog(obj, keys)) {
+                const prevCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
+                if (keys.length > prevCount) {
+                    _asPlantCatalog = obj;
+                    console.log('[GardenOverview] Plant catalog captured (' + keys.length + ' species' + (prevCount > 0 ? ', upgraded from ' + prevCount : '') + '). Species:', keys.slice().sort().join(', '));
+                    _tryRestoreKeys();
+                } else {
+                    console.log('[GardenOverview] Plant catalog candidate ignored (' + keys.length + ' species, already have ' + prevCount + ').');
+                }
+                return;
+            }
             if (depth >= 3) return;
             for (let i = 0; i < keys.length; i++) {
                 try { const v = obj[keys[i]]; if (v && typeof v === 'object') _scan(v, depth + 1); } catch(e) {}
             }
         }
 
+        let _currentKeys = _nativeKeys;
+        let _inKeys = false;
         try {
-            _NativeObject.keys = function(obj) {
-                const result = _origKeys.call(_NativeObject, obj);
-                if (!_asPetCatalog) { try { _scan(obj, 0); } catch(e) {} }
-                return result;
+            Object.defineProperty(Object, 'keys', {
+                get() {
+                    return function(obj) {
+                        if (_inKeys) return _nativeKeys.call(Object, obj);
+                        _inKeys = true;
+                        try {
+                            const result = _currentKeys.call(Object, obj);
+                            if (!_asPetCatalog || !_asPlantCatalog) { try { _scan(obj, 0); } catch(e) {} }
+                            return result;
+                        } finally {
+                            _inKeys = false;
+                        }
+                    };
+                },
+                set(fn) { _currentKeys = fn; },
+                configurable: true,
+            });
+            console.log('[GardenOverview] Object.keys override installed (sticky)');
+        } catch(e) {
+            console.warn('[GardenOverview] defineProperty on Object.keys failed, using plain override:', e);
+            Object.keys = function(obj) {
+                if (_inKeys) return _nativeKeys.call(Object, obj);
+                _inKeys = true;
+                try {
+                    const result = _nativeKeys.call(Object, obj);
+                    if (!_asPetCatalog || !_asPlantCatalog) { try { _scan(obj, 0); } catch(e2) {} }
+                    return result;
+                } finally {
+                    _inKeys = false;
+                }
             };
-            console.log('[GardenOverview] Object.keys override installed');
-        } catch(e) { console.warn('[GardenOverview] Pet catalog capture failed:', e); }
+        }
     })();
+
+    function _getPlantSellPrice(species) { return _asPlantCatalog?.[species]?.crop?.baseSellPrice; }
+    function _getPlantMaxScale(species)  { return _asPlantCatalog?.[species]?.crop?.maxScale; }
 
     // === GM helpers ===
     function setMagicCircleValue(key, value) {
@@ -86,7 +157,9 @@
         const originalRead = atom.read;
         atom.read = function(get) {
             const value = originalRead.call(this, get);
-            if (!state.atoms[key]) console.log('[GardenOverview] Atom captured:', key);
+            if (!(key in state.atoms)) {
+                console.log('[GardenOverview] Atom captured:', key, '→', JSON.stringify(value)?.slice(0, 300));
+            }
             state.atoms[key] = value;
             return value;
         };
@@ -96,8 +169,8 @@
         const atoms = [
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/baseAtoms.ts/myUserSlotAtom',              'playerSlot'],
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/myAtoms.ts/myPrimitivePetSlotsAtom',        'activePets'],
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/miscAtoms.ts/friendBonusMultiplierAtom',    'friendBonus'],
             ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/inventoryAtoms.ts/myInventoryAtom',         'inventory'],
+            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/miscAtoms.ts/numFriendsInRoomAtom',         'numFriendsInRoom'],
         ];
 
         console.log('[GardenOverview] Waiting for jotaiAtomCache...');
@@ -113,48 +186,12 @@
     }
 
     // === Constants ===
-    const SPECIES_MAX_SCALES = {
-        Carrot:        3,   Cabbage:       3,   Strawberry:    2,   Aloe:          2.5,
-        Beet:          3,   Rose:          4,   FavaBean:      3,   Delphinium:    3,
-        Blueberry:     2,   Apple:         2,   OrangeTulip:   3,   Tomato:        2,
-        Daffodil:      3,   Corn:          2,   Watermelon:    3,   Pumpkin:       3,
-        Echeveria:     2.75, Gentian:      3,   Coconut:       3,   Banana:        1.7,
-        PineTree:      3.5, Lily:          2.75, Camellia:     2.5, Squash:        2.5,
-        BurrosTail:    2.5, Mushroom:      3.5, Cactus:        1.8, Bamboo:        2,
-        Poinsettia:    2,   VioletCort:    3.5, Chrysanthemum: 2.75, Grape:        2,
-        Pepper:        2,   Lemon:         3,   PassionFruit:  2,   DragonFruit:   2,
-        Lychee:        2,   Sunflower:     2.5, Pear:          2,   Peach:         3,
-        Date:          2,   Cacao:         2.5, Clover:        3,   FourLeafClover: 3,
-        Starweaver:    2,   DawnCelestial: 2.5, MoonCelestial: 2
-    };
 
-    const SPECIES_VALUES = {
-        Carrot: 20,         Cabbage: 42,        Strawberry: 14,     Aloe: 310,
-        Beet: 350,          Rose: 300,           FavaBean: 30,       Delphinium: 530,
-        Blueberry: 23,      Apple: 73,           OrangeTulip: 767,   Tomato: 27,
-        Daffodil: 1090,     Corn: 36,            Watermelon: 2708,   Pumpkin: 3700,
-        Echeveria: 4600,    Pear: 250,           Gentian: 10000,     Coconut: 302,
-        PineTree: 15000,    Banana: 1750,        Lily: 20123,        Camellia: 4875,
-        Squash: 3500,       Peach: 9000,         BurrosTail: 6000,   Mushroom: 160000,
-        Cactus: 261000,     Bamboo: 500000,      Poinsettia: 30000,  VioletCort: 600000,
-        Chrysanthemum: 18000, Date: 15000,       Clover: 30,         FourLeafClover: 7777,
-        Grape: 12500,       Pepper: 7220,        Lemon: 10000,       PassionFruit: 24500,
-        DragonFruit: 24500, Cacao: 70000,        Lychee: 50000,      Sunflower: 750000,
-        Starweaver: 10000000, DawnCelestial: 11000000, MoonCelestial: 11000000
-    };
-
-    const TRACKED_SPECIES_DEFAULTS = {
-        Carrot: false, Cabbage: false, Strawberry: false, Aloe: false, Beet: false,
-        Rose: false, FavaBean: false, Delphinium: false, Blueberry: false, Apple: false,
-        OrangeTulip: false, Tomato: false, Daffodil: false, Corn: false, Watermelon: false,
-        Pumpkin: false, Echeveria: false, Pear: false, Gentian: false, Coconut: false,
-        PineTree: false, Banana: false, Lily: false, Camellia: false, Squash: false,
-        Peach: false, BurrosTail: false, Mushroom: false, Cactus: false, Bamboo: false,
-        Poinsettia: false, VioletCort: false, Chrysanthemum: false, Date: false,
-        Clover: false, FourLeafClover: false, Grape: false, Pepper: false, Lemon: false,
-        PassionFruit: false, DragonFruit: false, Cacao: false, Lychee: false,
-        Sunflower: false, Starweaver: true, DawnCelestial: true, MoonCelestial: true
-    };
+    const _DEFAULT_TRACKED_TRUE = new Set(['Starweaver', 'DawnCelestial', 'MoonCelestial', 'Dawnbreaker']);
+    function _getTrackedSpeciesDefaults() {
+        if (!_asPlantCatalog) return {};
+        return Object.fromEntries(Object.keys(_asPlantCatalog).map(function(s) { return [s, _DEFAULT_TRACKED_TRUE.has(s)]; }));
+    }
 
     const MUTATION_DEFAULTS = {
         wet: false, chilled: false, frozen: true,
@@ -193,10 +230,11 @@
             "Thunderstruck+Ambershine": 10, "Thunderstruck+Amberbound": 14, "Thunderstruck+Ambercharged": 14
         };
 
-        const trackedSpeciesConfig = Object.assign({}, TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
+        const trackedSpeciesConfig = Object.assign({}, _getTrackedSpeciesDefaults(), getMagicCircleValue('tracked_species', null) || {});
         const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
 
-        const FRIEND_BONUS = typeof state.atoms.friendBonus === 'number' ? state.atoms.friendBonus : 1.5;
+        const numFriendsInRoom = state.atoms.numFriendsInRoom;
+        const FRIEND_BONUS = typeof numFriendsInRoom === 'number' ? 1 + Math.min(numFriendsInRoom, 5) * 0.10 : null;
 
         const playerSlot = state.atoms.playerSlot;
         if (!playerSlot) return null;
@@ -207,7 +245,7 @@
         const currentTime = Date.now();
         const activePets = state.atoms.activePets || [];
         const inventoryPets = (state.atoms.inventory?.items || []).filter(i => i.itemType === 'Pet');
-        const hutchPets = (state.atoms.inventory?.items || []).filter(i => i.itemType === 'PetHutch').flatMap(h => h.items || []);
+        const hutchPets = (state.atoms.inventory?.storages || []).filter(s => s.decorId === 'PetHutch').flatMap(s => s.items || []);
         const allAvailablePets = [...activePets, ...inventoryPets, ...hutchPets];
 
         const stats = {
@@ -221,7 +259,7 @@
             noMutations: 0, notMature: 0, notMaxSize: 0,
             matureCount: 0, readyNow: 0,
             boostsUntilMaxSize: 0, totalFarmValue: 0,
-            plantCounts: {}, naturalMaxSize: [],
+            plantCounts: {},
             maxEndTime: 0, minEndTime: Infinity,
         };
 
@@ -280,31 +318,6 @@
         const turtleExpectations = getTurtleExpectations(activePets);
         const hasTurtleBoost = turtleExpectations.expectedMinutesRemoved > 0;
 
-        const NATURAL_MAX_SIZE_DURATIONS = {
-            Carrot: [12000], Strawberry: [25000,30000,35000,40000,45000], Aloe: [112500],
-            Delphinium: [75000], Blueberry: [55000,66000,77000,88000,99000],
-            Apple: [13500000,16200000,18900000,21600000,24300000,27000000,29700000],
-            OrangeTulip: [24000], Tomato: [100000,120000], Daffodil: [150000], Corn: [75000],
-            Watermelon: [2160000], Pumpkin: [6300000], Echeveria: [330000], Cabbage: [135000],
-            Beet: [180000], Rose: [1200000], FavaBean: [720000], Gentian: [270000],
-            Coconut: [12600000,14400000,16200000,18000000,19800000,21600000,23400000],
-            Banana: [9900000,12150000,14400000,16650000,18900000], PineTree: [50400000],
-            Lily: [660000],
-            Camellia: [32400000,37800000,43200000,48600000,54000000,59400000,64800000,70200000],
-            Squash: [600000,700000,800000], BurrosTail: [300000,350000], Mushroom: [302400000],
-            Cactus: [16200000], Bamboo: [86400000], Poinsettia: [8100000,10800000],
-            Chrysanthemum: [35100000,40500000,45900000,51300000,56700000,62100000,67500000],
-            Grape: [2250000],
-            Pepper: [1500000,1800000,2100000,2400000,2700000,3000000,3300000,3600000,3900000],
-            Lemon: [12600000,14400000,16200000,18000000,19800000,21600000],
-            PassionFruit: [6750000,8100000],
-            DragonFruit: [2250000,2700000,3150000,3600000,4050000,4500000,4950000],
-            Lychee: [4500000,5400000,6300000,7200000,8100000,9000000],
-            Sunflower: [54000000], VioletCort: [226800000],
-            Starweaver: [216000000], DawnCelestial: [259200000],
-            MoonCelestial: [216000000,259200000,302400000]
-        };
-
         Object.entries(tileObjects).forEach(([tileId, tile]) => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
 
@@ -314,7 +327,7 @@
             }
 
             const isTargetSpecies = trackedSpecies.includes(tile.species);
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
 
             tile.slots.forEach((slot, slotIndex) => {
                 const mutations = slot.mutations || [];
@@ -361,17 +374,6 @@
                 }
                 if (isTargetSpecies && mutations.length === 0) stats.noMutations++;
 
-                // Natural max size detection
-                if (maxScale) {
-                    const isMaxScale = slot.targetScale === maxScale;
-                    if (isMaxScale) {
-                        const naturalDurations = NATURAL_MAX_SIZE_DURATIONS[tile.species];
-                        if (naturalDurations && naturalDurations[slotIndex] === (slot.endTime - slot.startTime)) {
-                            stats.naturalMaxSize.push({ species: tile.species, tileId, slotIndex, mutations, targetScale: slot.targetScale });
-                        }
-                    }
-                }
-
                 if (isTargetSpecies) {
                     let color = 1;
                     for (const m of mutations) {
@@ -387,10 +389,37 @@
                     if (weather && time) wt = WEATHER_TIME_COMBO[`${weather}+${time}`] || Math.max(WEATHER_MULT[weather], TIME_MULT[time]);
                     else if (weather) wt = WEATHER_MULT[weather];
                     else if (time)    wt = TIME_MULT[time];
-                    stats.totalFarmValue += Math.round(Math.round(color * wt) * (SPECIES_VALUES[tile.species] || 0) * (slot.targetScale || 1) * FRIEND_BONUS);
+                    if (FRIEND_BONUS !== null) stats.totalFarmValue += Math.round(Math.round(color * wt) * (_getPlantSellPrice(tile.species) ?? 0) * (slot.targetScale || 1) * FRIEND_BONUS);
                 }
             });
         });
+
+        // Double Harvest & Crop Refund multipliers — best 3 available pets each
+        function getPetStr(p) {
+            const ms = asPetMaxScale(p.petSpecies);
+            const xl = asPetXpPerLevel(p.petSpecies);
+            if (!ms || !xl) return 87;
+            const xpComp    = Math.min(Math.floor((p.xp || 0) / xl), 30);
+            const scaleComp = Math.floor((((p.targetScale || 1) - 1) / (ms - 1)) * 20 + 80) - 30;
+            return xpComp + scaleComp;
+        }
+        const doubleHarvestStrs = allAvailablePets
+            .filter(p => p.hunger > 0 && (p.abilities || []).includes('DoubleHarvest'))
+            .map(p => getPetStr(p))
+            .sort((a, b) => b - a)
+            .slice(0, 3);
+        const P_double = doubleHarvestStrs.reduce((s, str) => s + 0.05 * str / 100, 0);
+        const doubleHarvestMult = 1 + P_double;
+
+        const refundStrs = allAvailablePets
+            .filter(p => p.hunger > 0 && (p.abilities || []).includes('ProduceRefund'))
+            .map(p => getPetStr(p))
+            .sort((a, b) => b - a)
+            .slice(0, 3);
+        const P_refund = refundStrs.reduce((sum, str) => sum + 0.20 * str / 100, 0);
+        const cropRefundMult = P_refund < 0.9999 ? 1 / (1 - P_refund) : 10000;
+
+        stats.totalFarmValue = Math.round(stats.totalFarmValue * doubleHarvestMult * cropRefundMult);
 
         const timeRemaining = Math.max(0, stats.maxEndTime - currentTime);
         const remainingRealMinutes = timeRemaining / (1000 * 60);
@@ -438,7 +467,7 @@
         Object.values(tileObjects).forEach(tile => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
             if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
             tile.slots.forEach(slot => {
                 let s = slot.targetScale || 1;
                 if (s < maxScale) {
@@ -469,7 +498,7 @@
         Object.values(tileObjects).forEach(tile => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
             if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = SPECIES_MAX_SCALES[tile.species];
+            const maxScale = _getPlantMaxScale(tile.species);
             tile.slots.forEach(slot => {
                 let s = slot.targetScale || 1;
                 if (s < maxScale) {
@@ -486,20 +515,21 @@
             gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
             frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
+            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  stats.missingAmber),
             wet:         getGranterETA(activePets, 'RainDance',          10.0, stats.missingWet),
             chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  stats.missingChilled),
             cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, stats.boostsUntilMaxSize),
             cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
         };
         stats.trackedSpecies = trackedSpecies;
-        stats.TRACKED_SPECIES_DEFAULTS = TRACKED_SPECIES_DEFAULTS;
+        stats.TRACKED_SPECIES_DEFAULTS = _getTrackedSpeciesDefaults();
         stats.friendBonus = FRIEND_BONUS;
         return stats;
     }
 
     // === updatePopupContent ===
     function updatePopupContent(popup) {
-        if (!popup) popup = document.getElementById('farm-stats-popup');
+        if (!popup) popup = document.getElementById('go-farm-stats-popup');
         if (!popup) return;
         const stats = getFarmStatsData();
         if (!stats) return;
@@ -628,13 +658,13 @@
             goodBars += mutBar('Amberlit / Dawnlit', '#ff9a00', amberDawnHave, totalSlots);
         } else {
             if (mutConfig.amberlit) goodBars += mutBar('Amberlit', '#ff8c00', amberlitHave, totalSlots);
-            if (mutConfig.dawnlit)  goodBars += mutBar('Dawnlit', '#f4a261', dawnlitHave, totalSlots);
+            if (mutConfig.dawnlit)  goodBars += mutBar('Dawnlit', '#c084e8', dawnlitHave, totalSlots);
         }
         if (combineDawnAmbercharged) {
-            goodBars += mutBar('Dawncharged / Ambercharged', '#e07b39', dawnAmberchargedHave, totalSlots);
+            goodBars += mutBar('Dawnbound / Amberbound', '#e07b39', dawnAmberchargedHave, totalSlots);
         } else {
-            if (mutConfig.dawncharged)  goodBars += mutBar('Dawncharged', '#e07b39', dawnchargedHave, totalSlots);
-            if (mutConfig.ambercharged) goodBars += mutBar('Ambercharged', '#c45e00', amberchargedHave, totalSlots);
+            if (mutConfig.dawncharged)  goodBars += mutBar('Dawnbound', '#a855f7', dawnchargedHave, totalSlots);
+            if (mutConfig.ambercharged) goodBars += mutBar('Amberbound', '#c45e00', amberchargedHave, totalSlots);
         }
         const badBars = (mutConfig.none ? badMutBar('None', '#c084e8', stats.noMutations, totalSlots) : '');
 
@@ -644,6 +674,7 @@
             + etaRow('&#x1F4A7; Wet', stats.missingWet, totalSlots, stats.granterETAs?.wet, '#4fc3f7')
             + etaRow('&#x2745;&#xFE0F; Chilled', stats.missingChilled, totalSlots, stats.granterETAs?.chilled, '#81d4fa')
             + etaRow('&#x2728; Amberlit', stats.missingAmber, totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
+            + etaRow('&#x1F305; Dawnlit', stats.missingAmber, totalSlots, stats.granterETAs?.dawnlit, '#c084e8')
             + etaRow('&#x1F331; Max Size', stats.boostsUntilMaxSize, null, stats.granterETAs?.cropSize, '#a78bfa', true)
             + etaRow('&#x1F41D; Bee Size', stats.boostsUntilMaxSizeBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
         const hasETAs = etaRows.trim() !== '';
@@ -670,16 +701,6 @@
             growthHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;">${cards.join('')}</div>`;
         }
 
-        const naturalMaxHTML = stats.naturalMaxSize.length > 0 ? `
-            <div style="padding:10px 16px;border-top:1px solid #1a2a2a;">
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#4a8a8a;margin-bottom:8px;">Natural Max Size</div>
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:5px 15px;font-size:12px;padding-left:10px;">
-                    ${stats.naturalMaxSize.map(n => `
-                        <div style="color:#7ab8b8;">${n.species}</div>
-                        <div style="text-align:right;color:#7ab8b8;">${n.mutations.length > 0 ? n.mutations.join(', ') : 'No mutations'}</div>
-                    `).join('')}
-                </div>
-            </div>` : '';
 
         popup.innerHTML = `
             <div style="background:#0a1f1f;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;cursor:move;">
@@ -687,6 +708,8 @@
                 <div style="display:flex;align-items:center;gap:4px;">
                     <button class="species-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked plants">&#x1F33F;</button>
                     <button class="mut-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked mutations">&#x2699;</button>
+                    <button class="keybind-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure keybind">&#x2328;</button>
+                    <button class="zoom-toggle-btn" style="background:${getMagicCircleValue('farm_stats_zoom', 1) !== 1 ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)'};border:none;color:#7ab8b8;cursor:pointer;font-size:8px;border-radius:4px;width:32px;height:24px;line-height:1;font-family:monospace;" title="Cycle zoom">${getMagicCircleValue('farm_stats_zoom', 1)}×</button>
                     <button class="close-farm-stats-btn" style="background:#c0392b;color:white;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;">&#x2715;</button>
                 </div>
             </div>
@@ -716,8 +739,6 @@
                 </div>
             </div>
 
-            ${naturalMaxHTML}
-
             <div style="padding:10px 16px;border-bottom:1px solid #1a2a2a;">
                 <div class="plant-toggle-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
                     <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#4a8a8a;display:flex;align-items:center;gap:6px;">
@@ -737,19 +758,134 @@
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#0a1f1f;border-top:1px solid #1e3a3a;">
-                <span style="font-size:11px;color:#4a8a8a;">Est. value &nbsp;<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">+${Math.round((stats.friendBonus - 1) * 100)}% bonus</span></span>
-                <span style="font-size:20px;font-weight:bold;color:#ffd84d;">${formatFarmValue(stats.totalFarmValue)}</span>
+                <span style="font-size:11px;color:#4a8a8a;">Est. value &nbsp;${stats.friendBonus !== null ? `<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">+${Math.round((stats.friendBonus - 1) * 100)}% bonus</span>` : `<span style="font-size:10px;background:#1e3a3a;color:#4a8a8a;padding:1px 6px;border-radius:3px;">bonus unknown</span>`}</span>
+                <span style="font-size:20px;font-weight:bold;color:#ffd84d;">${stats.friendBonus !== null ? formatFarmValue(stats.totalFarmValue) : '—'}</span>
             </div>
         `;
+
+        // Apply saved zoom state
+        const _ZOOM_CYCLE = [1, 1.25, 1.5];
+        const _currentZoom = getMagicCircleValue('farm_stats_zoom', 1);
+        popup.style.transform       = _currentZoom !== 1 ? 'scale(' + _currentZoom + ')' : '';
+        popup.style.transformOrigin = 'top left';
+
+        popup.querySelector('.zoom-toggle-btn').onclick = function(e) {
+            e.preventDefault(); e.stopPropagation();
+            const cur  = getMagicCircleValue('farm_stats_zoom', 1);
+            const idx  = _ZOOM_CYCLE.indexOf(cur);
+            const next = _ZOOM_CYCLE[(idx === -1 ? 0 : idx + 1) % _ZOOM_CYCLE.length];
+            setMagicCircleValue('farm_stats_zoom', next);
+            popup.style.transform = next !== 1 ? 'scale(' + next + ')' : '';
+            const btn = popup.querySelector('.zoom-toggle-btn');
+            btn.textContent      = next + '×';
+            btn.style.background = next !== 1 ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)';
+        };
 
         // Close button
         popup.querySelector('.close-farm-stats-btn').onclick = function(e) {
             e.preventDefault(); e.stopPropagation();
             if (popup.refreshInterval) clearInterval(popup.refreshInterval);
+            popup._dragAbort?.abort();
             popup.remove();
-            document.getElementById('mut-config-gui')?.remove();
-            document.getElementById('species-config-gui')?.remove();
+            document.getElementById('go-mut-config-gui')?.remove();
+            document.getElementById('go-species-config-gui')?.remove();
+            document.getElementById('go-keybind-config-gui')?.remove();
         };
+
+        // Keybind config button
+        popup.querySelector('.keybind-config-btn').addEventListener('click', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            const existing = document.getElementById('go-keybind-config-gui');
+            if (existing) { existing.remove(); return; }
+
+            const kbGui = document.createElement('div');
+            kbGui.id = 'go-keybind-config-gui';
+            kbGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+
+            const hdr = document.createElement('div');
+            hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
+            hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x2328; Keybind</span>';
+            const closebtn = document.createElement('button'); closebtn.textContent = '✕';
+            closebtn.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
+            closebtn.onclick = () => kbGui.remove();
+            hdr.appendChild(closebtn);
+            kbGui.appendChild(hdr);
+
+            const body = document.createElement('div');
+            body.style.cssText = 'padding:10px 12px;display:flex;flex-direction:column;gap:8px;';
+
+            function formatKeybind(kb) {
+                if (!kb?.key) return '— not set —';
+                const parts = [];
+                if (kb.ctrl)  parts.push('Ctrl');
+                if (kb.alt)   parts.push('Alt');
+                if (kb.shift) parts.push('Shift');
+                parts.push(kb.key);
+                return parts.join('+');
+            }
+
+            // Key capture
+
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+            const keybindBtn = document.createElement('button');
+            keybindBtn.textContent = formatKeybind(_keybind);
+            keybindBtn.style.cssText = 'flex:1;padding:4px 8px;border-radius:6px;border:1px solid #2a6a6a;background:#0f3a3a;color:#a4f5f5;font-size:12px;cursor:pointer;font-family:monospace;text-align:center;';
+            keybindBtn.title = 'Click then press a key';
+
+            const clearBtn = document.createElement('button');
+            clearBtn.textContent = '✕';
+            clearBtn.style.cssText = 'padding:4px 7px;border-radius:6px;border:1px solid #5a2a2a;background:#3a0f0f;color:#f55a5a;font-size:11px;cursor:pointer;font-family:monospace;';
+            clearBtn.title = 'Clear keybind';
+
+            const MODIFIER_KEYS = new Set(['Control','Alt','Shift','Meta','AltGraph']);
+            let _kbListening = false, _kbHandler = null;
+            keybindBtn.addEventListener('click', function() {
+                if (_kbListening) return;
+                _kbListening = true;
+                keybindBtn.textContent = 'Press a key…';
+                keybindBtn.style.background = '#1a4a1a';
+                keybindBtn.style.borderColor = '#4a8a4a';
+                _kbHandler = function(ev) {
+                    if (MODIFIER_KEYS.has(ev.key)) return;
+                    ev.preventDefault(); ev.stopPropagation();
+                    if (ev.key !== 'Escape') {
+                        _keybind = { key: ev.key, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey };
+                        setMagicCircleValue('keybind', _keybind);
+                        keybindBtn.textContent = formatKeybind(_keybind);
+                    } else {
+                        keybindBtn.textContent = formatKeybind(_keybind);
+                    }
+                    keybindBtn.style.background = '#0f3a3a';
+                    keybindBtn.style.borderColor = '#2a6a6a';
+                    _kbListening = false;
+                    document.removeEventListener('keydown', _kbHandler, true);
+                    _kbHandler = null;
+                };
+                document.addEventListener('keydown', _kbHandler, true);
+            });
+            clearBtn.addEventListener('click', function() {
+                _keybind = null;
+                setMagicCircleValue('keybind', null);
+                keybindBtn.textContent = '— not set —';
+                if (_kbHandler) { document.removeEventListener('keydown', _kbHandler, true); _kbHandler = null; _kbListening = false; }
+            });
+
+            row.appendChild(keybindBtn);
+            row.appendChild(clearBtn);
+            body.appendChild(row);
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:9px;color:#3a6a6a;';
+            hint.textContent = 'Hold modifiers + press key to bind. Esc cancels.';
+            body.appendChild(hint);
+
+            kbGui.appendChild(body);
+            document.body.appendChild(kbGui);
+            kbGui.style.left = Math.round((window.innerWidth  - kbGui.offsetWidth)  / 2) + 'px';
+            kbGui.style.top  = Math.round((window.innerHeight - kbGui.offsetHeight) / 2) + 'px';
+        });
 
         // Mutations toggle
         popup.querySelector('.mutations-toggle-header').addEventListener('click', function(e) {
@@ -774,17 +910,17 @@
         // Species config button
         popup.querySelector('.species-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
-            const existing = document.getElementById('species-config-gui');
+            const existing = document.getElementById('go-species-config-gui');
             if (existing) { existing.remove(); return; }
 
             const speciesGui = document.createElement('div');
-            speciesGui.id = 'species-config-gui';
+            speciesGui.id = 'go-species-config-gui';
             speciesGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:230px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 
             function buildSpeciesPill(key, cfg) {
                 const on = !!cfg[key];
                 const btn = document.createElement('button');
-                btn.className = 'species-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
+                btn.className = 'go-species-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
                 btn.style.cssText = 'padding:2px 6px;border-radius:10px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:9px;cursor:pointer;font-family:monospace;white-space:nowrap;';
                 return btn;
             }
@@ -805,7 +941,7 @@
                 wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
                 Object.keys(stats.TRACKED_SPECIES_DEFAULTS).forEach(key => wrap.appendChild(buildSpeciesPill(key, c)));
                 body.appendChild(wrap); speciesGui.appendChild(body);
-                speciesGui.querySelectorAll('.species-pill').forEach(pill => {
+                speciesGui.querySelectorAll('.go-species-pill').forEach(pill => {
                     pill.addEventListener('click', function(ev) {
                         ev.preventDefault(); ev.stopPropagation();
                         const latest = Object.assign({}, stats.TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
@@ -824,17 +960,17 @@
         // Mutation config button
         popup.querySelector('.mut-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
-            const existing = document.getElementById('mut-config-gui');
+            const existing = document.getElementById('go-mut-config-gui');
             if (existing) { existing.remove(); return; }
 
             const cfgGui = document.createElement('div');
-            cfgGui.id = 'mut-config-gui';
+            cfgGui.id = 'go-mut-config-gui';
             cfgGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 
             function buildPill(key, cfg) {
                 const on = cfg[key] !== false;
                 const btn = document.createElement('button');
-                btn.className = 'mut-cfg-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
+                btn.className = 'go-mut-cfg-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
                 btn.style.cssText = 'padding:3px 10px;border-radius:12px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:11px;cursor:pointer;font-family:monospace;';
                 return btn;
             }
@@ -859,7 +995,7 @@
                 const pillsWrap = document.createElement('div');
                 pillsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
                 [['rainbow','Rainbow'],['gold','Gold'],['frozen','Frozen'],['thunderstruck','Thunderstruck'],['wet','Wet'],['chilled','Chilled'],
-                 ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawncharged'],['ambercharged','Ambercharged'],
+                 ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawnbound'],['ambercharged','Amberbound'],
                  ['none','None']
                 ].forEach(([key, label]) => {
                     const btn = buildPill(key, c); btn.textContent = label; pillsWrap.appendChild(btn);
@@ -873,14 +1009,14 @@
                 const combineWrap = document.createElement('div');
                 combineWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
                 [['combineRainbow','Rainbow+Gold'],['combineAmberDawn','Amberlit+Dawnlit'],
-                 ['combineDawnAmbercharged','Dawncharged+Ambercharged'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
+                 ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
                 ].forEach(([key, label]) => {
                     const btn = buildPill(key, c); btn.textContent = label; combineWrap.appendChild(btn);
                 });
                 body.appendChild(combineWrap);
                 cfgGui.appendChild(body);
 
-                cfgGui.querySelectorAll('.mut-cfg-pill').forEach(pill => {
+                cfgGui.querySelectorAll('.go-mut-cfg-pill').forEach(pill => {
                     pill.addEventListener('click', function(ev) {
                         ev.preventDefault(); ev.stopPropagation();
                         const latest = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
@@ -899,12 +1035,14 @@
 
     // === showFarmStatsPopup ===
     function showFarmStatsPopup() {
-        const existing = document.getElementById('farm-stats-popup');
+        const existing = document.getElementById('go-farm-stats-popup');
         if (existing) {
             if (existing.refreshInterval) clearInterval(existing.refreshInterval);
+            existing._dragAbort?.abort();
             existing.remove();
-            document.getElementById('mut-config-gui')?.remove();
-            document.getElementById('species-config-gui')?.remove();
+            document.getElementById('go-mut-config-gui')?.remove();
+            document.getElementById('go-species-config-gui')?.remove();
+            document.getElementById('go-keybind-config-gui')?.remove();
             return;
         }
 
@@ -914,7 +1052,7 @@
         }
 
         const popup = document.createElement('div');
-        popup.id = 'farm-stats-popup';
+        popup.id = 'go-farm-stats-popup';
         popup.style.cssText = `
             position: fixed;
             background: #0d1117;
@@ -942,8 +1080,11 @@
             popup.style.top  = Math.round((window.innerHeight - popup.offsetHeight) / 2) + 'px';
         }
 
-        // Drag logic — listener on popup itself so it survives innerHTML refreshes
+        // Drag logic — listeners scoped to an AbortController so they clean up on close
         let dragging = false, dragOffX, dragOffY;
+        const dragAbort = new AbortController();
+        popup._dragAbort = dragAbort;
+        const { signal } = dragAbort;
         popup.addEventListener('mousedown', function(e) {
             const header = popup.firstElementChild;
             if (!header || !header.contains(e.target)) return;
@@ -959,14 +1100,14 @@
             const maxTop  = window.innerHeight - popup.offsetHeight;
             popup.style.left = Math.max(0, Math.min(maxLeft, e.clientX - dragOffX)) + 'px';
             popup.style.top  = Math.max(0, Math.min(maxTop,  e.clientY - dragOffY)) + 'px';
-        });
+        }, { signal });
         document.addEventListener('mouseup', function() {
             if (dragging) setMagicCircleValue('go_popup_position', { left: popup.style.left, top: popup.style.top });
             dragging = false;
-        });
+        }, { signal });
 
         popup.refreshInterval = setInterval(() => {
-            if (!document.getElementById('farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
+            if (!document.getElementById('go-farm-stats-popup')) { clearInterval(popup.refreshInterval); return; }
             updatePopupContent(popup);
         }, 5000);
     }
@@ -974,9 +1115,9 @@
     // === Trigger button ===
     function createTriggerButton() {
         console.log('[GardenOverview] createTriggerButton called, document.body:', !!document.body);
-        if (document.getElementById('garden-overview-trigger')) return;
+        if (document.getElementById('go-trigger')) return;
         const btn = document.createElement('button');
-        btn.id = 'garden-overview-trigger';
+        btn.id = 'go-trigger';
         btn.innerHTML = '&#x1F33F;';
         btn.title = 'Garden Overview';
         btn.style.cssText = `
@@ -1001,6 +1142,22 @@
         document.body.appendChild(btn);
         console.log('[GardenOverview] Trigger button added to page');
     }
+
+    // === Keybind listener ===
+    _keybind = getMagicCircleValue('keybind', null);
+    if (typeof _keybind === 'string') _keybind = { key: _keybind, ctrl: false, alt: false, shift: false };
+    document.addEventListener('keydown', function(e) {
+        if (!_keybind?.key) return;
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (e.key === _keybind.key &&
+            e.ctrlKey  === !!_keybind.ctrl &&
+            e.altKey   === !!_keybind.alt &&
+            e.shiftKey === !!_keybind.shift) {
+            e.preventDefault();
+            showFarmStatsPopup();
+        }
+    });
 
     // === Init ===
     console.log('[GardenOverview] Init, document.readyState:', document.readyState, '| document.body:', !!document.body);
