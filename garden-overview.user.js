@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.19
+// @version      1.20
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -48,13 +48,20 @@
             return sample && typeof sample === 'object' && 'crop' in sample && sample.crop && 'baseSellPrice' in sample.crop;
         }
 
+        let _restoreKeysTimer = null;
         function _tryRestoreKeys() {
             if (!_asPetCatalog || !_asPlantCatalog) return;
-            try {
-                Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
-            } catch(e) {
-                console.warn('[GardenOverview] Could not restore Object.keys:', e);
-            }
+            // Delay restore so a larger plant catalog can still be captured if the first was partial
+            if (_restoreKeysTimer) return;
+            _restoreKeysTimer = setTimeout(function() {
+                const finalCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
+                console.log('[GardenOverview] Restoring Object.keys. Final plant catalog: ' + finalCount + ' species.');
+                try {
+                    Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
+                } catch(e) {
+                    console.warn('[GardenOverview] Could not restore Object.keys:', e);
+                }
+            }, 5000);
         }
 
         function _scan(obj, depth) {
@@ -64,14 +71,19 @@
             try { keys = _nativeKeys.call(Object, obj); } catch(e) { return; }
             if (!_asPetCatalog && _looksLikePetCatalog(obj, keys)) {
                 _asPetCatalog = obj;
-                console.log('[GardenOverview] Pet catalog captured');
+                console.log('[GardenOverview] Pet catalog captured (' + keys.length + ' species). Sample keys:', keys.slice(0, 10));
                 _tryRestoreKeys();
                 return;
             }
-            if (!_asPlantCatalog && _looksLikePlantCatalog(obj, keys)) {
-                _asPlantCatalog = obj;
-                console.log('[GardenOverview] Plant catalog captured (' + keys.length + ' species)');
-                _tryRestoreKeys();
+            if (_looksLikePlantCatalog(obj, keys)) {
+                const prevCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
+                if (keys.length > prevCount) {
+                    _asPlantCatalog = obj;
+                    console.log('[GardenOverview] Plant catalog captured (' + keys.length + ' species' + (prevCount > 0 ? ', upgraded from ' + prevCount : '') + '). Species:', keys.slice().sort().join(', '));
+                    _tryRestoreKeys();
+                } else {
+                    console.log('[GardenOverview] Plant catalog candidate ignored (' + keys.length + ' species, already have ' + prevCount + ').');
+                }
                 return;
             }
             if (depth >= 3) return;
