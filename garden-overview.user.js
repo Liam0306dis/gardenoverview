@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.22
+// @version      1.23
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -49,19 +49,23 @@
         }
 
         let _restoreKeysTimer = null;
+        let _keysRestored = false;
+        function _restoreKeysNow(reason) {
+            if (_keysRestored) return;
+            _keysRestored = true;
+            const finalCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
+            console.log('[GardenOverview] Restoring Object.keys (' + reason + '). Final plant catalog: ' + finalCount + ' species.');
+            try {
+                Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
+            } catch(e) {
+                console.warn('[GardenOverview] Could not restore Object.keys:', e);
+            }
+        }
         function _tryRestoreKeys() {
             if (!_asPetCatalog || !_asPlantCatalog) return;
             // Delay restore so a larger plant catalog can still be captured if the first was partial
             if (_restoreKeysTimer) return;
-            _restoreKeysTimer = setTimeout(function() {
-                const finalCount = _asPlantCatalog ? _nativeKeys.call(Object, _asPlantCatalog).length : 0;
-                console.log('[GardenOverview] Restoring Object.keys. Final plant catalog: ' + finalCount + ' species.');
-                try {
-                    Object.defineProperty(Object, 'keys', { value: _nativeKeys, writable: true, configurable: true });
-                } catch(e) {
-                    console.warn('[GardenOverview] Could not restore Object.keys:', e);
-                }
-            }, 5000);
+            _restoreKeysTimer = setTimeout(function() { _restoreKeysNow('both catalogs captured'); }, 5000);
         }
 
         function _scan(obj, depth) {
@@ -127,6 +131,16 @@
                 }
             };
         }
+
+        // Safety net: never leave the override (and its per-call _scan) installed forever
+        // if one catalog is never matched (e.g. a game update changes its shape).
+        setTimeout(function() {
+            if (_keysRestored) return;
+            if (!_asPetCatalog || !_asPlantCatalog) {
+                console.warn('[GardenOverview] Catalog capture incomplete after 120s (pet: ' + !!_asPetCatalog + ', plant: ' + !!_asPlantCatalog + ')');
+            }
+            _restoreKeysNow('fallback timeout');
+        }, 120000);
     })();
 
     function _getPlantSellPrice(species) { return _asPlantCatalog?.[species]?.crop?.baseSellPrice; }
@@ -149,7 +163,8 @@
         const atom = atomCache?.get?.(atomPath);
 
         if (!atom || typeof atom.read !== 'function') {
-            if (retryCount < 20) setTimeout(() => hookAtom(atomPath, key, retryCount + 1), 500);
+            if (retryCount < 60) setTimeout(() => hookAtom(atomPath, key, retryCount + 1), 500);
+            else console.warn('[GardenOverview] Gave up hooking atom after 30s:', key);
             return;
         }
 
@@ -158,7 +173,9 @@
         atom.read = function(get) {
             const value = originalRead.call(this, get);
             if (!(key in state.atoms)) {
-                console.log('[GardenOverview] Atom captured:', key, '→', JSON.stringify(value)?.slice(0, 300));
+                let preview;
+                try { preview = JSON.stringify(value)?.slice(0, 300); } catch(err) { preview = '<unserializable>'; }
+                console.log('[GardenOverview] Atom captured:', key, '→', preview);
             }
             state.atoms[key] = value;
             return value;
@@ -203,6 +220,13 @@
     };
 
     // === Helpers ===
+    function removeConfigGuis() {
+        ['go-mut-config-gui', 'go-species-config-gui', 'go-keybind-config-gui'].forEach(function(id) {
+            const el = document.getElementById(id);
+            if (el) { el._abort?.abort(); el.remove(); }
+        });
+    }
+
     function formatFarmValue(value) {
         if (value >= 1_000_000_000_000) return (value / 1_000_000_000_000).toFixed(2) + 'T';
         if (value >= 1_000_000_000) return (value / 1_000_000_000).toFixed(2) + 'B';
@@ -255,10 +279,9 @@
             missingAmber: 0, missingAmberlit: 0, missingAmbercharged: 0,
             missingDawnlit: 0, missingDawncharged: 0,
             missingAmberDawn: 0, missingDawnAmbercharged: 0,
-            missingThunderstruck: 0, missingFrozenAndThunderstruck: 0,
             frozenCount: 0, wetCount: 0, chilledCount: 0, thunderstruckCount: 0,
             noMutations: 0, notMature: 0, notMaxSize: 0,
-            matureCount: 0, readyNow: 0,
+            readyNow: 0,
             boostsUntilMaxSize: 0, totalFarmValue: 0,
             plantCounts: {},
             maxEndTime: 0, minEndTime: Infinity,
@@ -307,8 +330,11 @@
             );
             let expectedMinutesRemoved = 0;
             turtles.forEach(p => {
-                const xpComponent = Math.min(Math.floor((p.xp || 0) / (100 * 3600) * 30), 30);
-                const scaleComponent = Math.floor((((p.targetScale || 1) - 1) / (2.5 - 1)) * 20 + 80) - 30;
+                // Fallbacks are Turtle's known values (100h to mature, 2.5 max scale) for when the catalog isn't captured yet
+                const xpPerLevel = asPetXpPerLevel(p.petSpecies) || 12000;
+                const petMaxScale = asPetMaxScale(p.petSpecies) || 2.5;
+                const xpComponent = Math.min(Math.floor((p.xp || 0) / xpPerLevel), 30);
+                const scaleComponent = Math.floor((((p.targetScale || 1) - 1) / (petMaxScale - 1)) * 20 + 80) - 30;
                 const base = xpComponent + scaleComponent;
                 const minutesRemoved = (base / 100 * 5) * 60 * (1 - Math.pow(1 - 0.27 * base / 100, 1 / 60));
                 expectedMinutesRemoved += minutesRemoved;
@@ -340,7 +366,6 @@
                     else stats.readyNow++;
                 }
 
-                if (isTargetSpecies) stats.matureCount += (currentTime >= slot.endTime ? 1 : 0);
                 if (isTargetSpecies && maxScale && (slot.targetScale || 1) < maxScale) stats.notMaxSize++;
 
                 if (isTargetSpecies && !mutations.includes(RAINBOW_MUTATION) && !mutations.includes(GOLD_MUTATION)) stats.missingRainbow++;
@@ -369,8 +394,6 @@
                     if (!mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit'))           stats.missingAmberDawn++;
                     if (!mutations.includes('Dawncharged') && !mutations.includes(AMBERCHARGED_MUTATION))     stats.missingDawnAmbercharged++;
                     if (hasThunderstruck) stats.thunderstruckCount++;
-                    if (!hasThunderstruck && !hasWet && !hasChilled && !hasFrozenMut) stats.missingThunderstruck++;
-                    if (!hasFrozenMut && !hasThunderstruck && !hasWet && !hasChilled) stats.missingFrozenAndThunderstruck++;
                 }
                 if (isTargetSpecies && mutations.length === 0) stats.noMutations++;
 
@@ -463,22 +486,26 @@
         const avgStr = scaleBoostStrs.length ? scaleBoostStrs.reduce((a, b) => a + b, 0) / scaleBoostStrs.length : 87;
         const boostMultiplier = 1 + avgStr / 1000;
 
-        let maxBoostsNeeded = 0;
-        Object.values(tileObjects).forEach(tile => {
-            if (tile.objectType !== 'plant' || !tile.slots?.length) return;
-            if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = _getPlantMaxScale(tile.species);
-            tile.slots.forEach(slot => {
-                let s = slot.targetScale || 1;
-                if (s < maxScale) {
+        function countBoostsToMax(multiplier, capPerSlot) {
+            let maxBoostsNeeded = 0;
+            Object.values(tileObjects).forEach(tile => {
+                if (tile.objectType !== 'plant' || !tile.slots?.length) return;
+                tile.slots.forEach(slot => {
+                    const slotSpecies = slot.species || tile.species;
+                    if (!trackedSpecies.includes(slotSpecies)) return;
+                    const maxScale = _getPlantMaxScale(slotSpecies);
+                    if (!maxScale) return;
+                    let s = slot.targetScale || 1;
+                    if (s >= maxScale) return;
                     let boosts = 0;
-                    while (s < maxScale) { s *= boostMultiplier; boosts++; if (boosts > 20) break; }
+                    while (s < maxScale) { s *= multiplier; boosts++; if (boosts > capPerSlot) break; }
                     if (boosts > maxBoostsNeeded) maxBoostsNeeded = boosts;
-                }
+                });
             });
-        });
+            return maxBoostsNeeded;
+        }
 
-        stats.boostsUntilMaxSize = maxBoostsNeeded;
+        stats.boostsUntilMaxSize = countBoostsToMax(boostMultiplier, 20);
 
         const beeBoostStrs = allAvailablePets
             .filter(p => (p.abilities || []).some(a => a === 'ProduceScaleBoost'))
@@ -494,26 +521,14 @@
         const avgBeeStr = beeBoostStrs.length ? beeBoostStrs.reduce((a, b) => a + b, 0) / beeBoostStrs.length : 87;
         const beeBoostMultiplier = 1 + 0.06 * avgBeeStr / 100;
 
-        let maxBoostsNeededBee = 0;
-        Object.values(tileObjects).forEach(tile => {
-            if (tile.objectType !== 'plant' || !tile.slots?.length) return;
-            if (!trackedSpecies.includes(tile.species)) return;
-            const maxScale = _getPlantMaxScale(tile.species);
-            tile.slots.forEach(slot => {
-                let s = slot.targetScale || 1;
-                if (s < maxScale) {
-                    let boosts = 0;
-                    while (s < maxScale) { s *= beeBoostMultiplier; boosts++; if (boosts > 200) break; }
-                    if (boosts > maxBoostsNeededBee) maxBoostsNeededBee = boosts;
-                }
-            });
-        });
-        stats.boostsUntilMaxSizeBee = maxBoostsNeededBee;
+        stats.boostsUntilMaxSizeBee = countBoostsToMax(beeBoostMultiplier, 200);
 
         stats.granterETAs = {
             rainbow:    getGranterETA(activePets, 'RainbowGranter',    0.72, stats.missingRainbow),
             gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
             frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
+            // A slot can hold only one time mutation (Amberlit/Dawnlit/Amberbound/Dawnbound), so both
+            // lit granters target the same pool: slots with no time mutation at all (missingAmber).
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
             dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  stats.missingAmber),
             wet:         getGranterETA(activePets, 'RainDance',          10.0, stats.missingWet),
@@ -538,10 +553,10 @@
 
         const plantsWasOpen = popup.querySelector('.plant-breakdown')
             ? popup.querySelector('.plant-breakdown').style.display === 'block'
-            : localStorage.getItem('farmStatsPopup_plantsOpen') !== '0';
+            : getMagicCircleValue('farmStatsPopup_plantsOpen', localStorage.getItem('farmStatsPopup_plantsOpen') || '1') !== '0';
         const mutationsWasOpen = popup.querySelector('.mutations-breakdown')
             ? popup.querySelector('.mutations-breakdown').style.display !== 'none'
-            : localStorage.getItem('farmStatsPopup_mutationsOpen') !== '0';
+            : getMagicCircleValue('farmStatsPopup_mutationsOpen', localStorage.getItem('farmStatsPopup_mutationsOpen') || '1') !== '0';
 
         const rainbowGradient = 'linear-gradient(to right,#ff4444,#ff8c00,#ffd700,#4caf50,#2196f3,#9c27b0)';
 
@@ -787,27 +802,28 @@
             if (popup.refreshInterval) clearInterval(popup.refreshInterval);
             popup._dragAbort?.abort();
             popup.remove();
-            document.getElementById('go-mut-config-gui')?.remove();
-            document.getElementById('go-species-config-gui')?.remove();
-            document.getElementById('go-keybind-config-gui')?.remove();
+            removeConfigGuis();
         };
 
         // Keybind config button
         popup.querySelector('.keybind-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
             const existing = document.getElementById('go-keybind-config-gui');
-            if (existing) { existing.remove(); return; }
+            if (existing) { existing._abort?.abort(); existing.remove(); return; }
 
             const kbGui = document.createElement('div');
             kbGui.id = 'go-keybind-config-gui';
             kbGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+            // Key-capture listener is tied to this controller so closing the GUI mid-capture can't leak it
+            const kbAbort = new AbortController();
+            kbGui._abort = kbAbort;
 
             const hdr = document.createElement('div');
             hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
             hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x2328; Keybind</span>';
             const closebtn = document.createElement('button'); closebtn.textContent = '✕';
             closebtn.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
-            closebtn.onclick = () => kbGui.remove();
+            closebtn.onclick = () => { kbAbort.abort(); kbGui.remove(); };
             hdr.appendChild(closebtn);
             kbGui.appendChild(hdr);
 
@@ -863,7 +879,7 @@
                     document.removeEventListener('keydown', _kbHandler, true);
                     _kbHandler = null;
                 };
-                document.addEventListener('keydown', _kbHandler, true);
+                document.addEventListener('keydown', _kbHandler, { capture: true, signal: kbAbort.signal });
             });
             clearBtn.addEventListener('click', function() {
                 _keybind = null;
@@ -894,7 +910,7 @@
             const ar = popup.querySelector('.mutations-toggle-arrow');
             bd.style.display = bd.style.display === 'none' ? 'block' : 'none';
             ar.textContent = bd.style.display === 'block' ? '▾' : '▸';
-            localStorage.setItem('farmStatsPopup_mutationsOpen', bd.style.display === 'block' ? '1' : '0');
+            setMagicCircleValue('farmStatsPopup_mutationsOpen', bd.style.display === 'block' ? '1' : '0');
         });
 
         // Plants toggle
@@ -904,7 +920,7 @@
             const ar = popup.querySelector('.plant-toggle-arrow');
             bd.style.display = bd.style.display === 'none' ? 'block' : 'none';
             ar.textContent = bd.style.display === 'block' ? '▾' : '▸';
-            localStorage.setItem('farmStatsPopup_plantsOpen', bd.style.display === 'block' ? '1' : '0');
+            setMagicCircleValue('farmStatsPopup_plantsOpen', bd.style.display === 'block' ? '1' : '0');
         });
 
         // Species config button
@@ -1040,9 +1056,7 @@
             if (existing.refreshInterval) clearInterval(existing.refreshInterval);
             existing._dragAbort?.abort();
             existing.remove();
-            document.getElementById('go-mut-config-gui')?.remove();
-            document.getElementById('go-species-config-gui')?.remove();
-            document.getElementById('go-keybind-config-gui')?.remove();
+            removeConfigGuis();
             return;
         }
 
@@ -1075,6 +1089,10 @@
         if (savedPopupPos) {
             popup.style.left = savedPopupPos.left;
             popup.style.top  = savedPopupPos.top;
+            // Clamp to the current viewport — a position saved on a bigger window can be fully off-screen
+            const rect = popup.getBoundingClientRect();
+            popup.style.left = Math.max(0, Math.min(window.innerWidth  - rect.width,  rect.left)) + 'px';
+            popup.style.top  = Math.max(0, Math.min(window.innerHeight - rect.height, rect.top))  + 'px';
         } else {
             popup.style.left = Math.round((window.innerWidth  - popup.offsetWidth)  / 2) + 'px';
             popup.style.top  = Math.round((window.innerHeight - popup.offsetHeight) / 2) + 'px';
@@ -1096,8 +1114,10 @@
         });
         document.addEventListener('mousemove', function(e) {
             if (!dragging) return;
-            const maxLeft = window.innerWidth  - popup.offsetWidth;
-            const maxTop  = window.innerHeight - popup.offsetHeight;
+            // getBoundingClientRect includes the zoom scale; offsetWidth/Height would not
+            const rect = popup.getBoundingClientRect();
+            const maxLeft = window.innerWidth  - rect.width;
+            const maxTop  = window.innerHeight - rect.height;
             popup.style.left = Math.max(0, Math.min(maxLeft, e.clientX - dragOffX)) + 'px';
             popup.style.top  = Math.max(0, Math.min(maxTop,  e.clientY - dragOffY)) + 'px';
         }, { signal });
