@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.23
+// @version      1.25
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -549,7 +549,19 @@
         const stats = getFarmStatsData();
         if (!stats) return;
 
-        const totalSlots = stats.trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s + 'Slots'] || 0), 0);
+        const totalSlots  = stats.trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s + 'Slots'] || 0), 0);
+        const totalPlants = stats.trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s] || 0), 0);
+        // Species rows: "9 (134)"; just the number when slots == plants.
+        // The Total row spells out the units ("61 plants (247 slots)") so the
+        // compact per-row format is self-explanatory.
+        function plantCountLabel(plants, slots) {
+            return plants > 0 && slots !== plants
+                ? `${plants} <span style="color:#4a8a8a;font-weight:normal;">(${slots})</span>`
+                : `${slots}`;
+        }
+        const totalLabel = totalPlants > 0 && totalSlots !== totalPlants
+            ? `${totalPlants} <span style="color:#4a8a8a;font-weight:normal;">plants (${totalSlots} slots)</span>`
+            : `${totalSlots}`;
 
         const plantsWasOpen = popup.querySelector('.plant-breakdown')
             ? popup.querySelector('.plant-breakdown').style.display === 'block'
@@ -763,11 +775,11 @@
                 </div>
                 <div class="plant-breakdown" style="display:${plantsWasOpen ? 'block' : 'none'};margin-top:6px;padding-left:10px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:2px 0;margin-bottom:2px;">
-                        <span style="color:#7ab8b8;">Total Slots</span>
-                        <span style="color:#7ab8b8;font-weight:bold;">${totalSlots}</span>
+                        <span style="color:#7ab8b8;">Total</span>
+                        <span style="color:#7ab8b8;font-weight:bold;">${totalLabel}</span>
                     </div>
                     ${stats.trackedSpecies.filter(s => (stats.plantCounts[s + 'Slots'] || 0) > 0).map(s =>
-                        `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;"><span style="color:#7ab8b8;">${s}</span><span style="color:#7ab8b8;">${stats.plantCounts[s + 'Slots']}</span></div>`
+                        `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;"><span style="color:#7ab8b8;">${s}</span><span style="color:#7ab8b8;">${plantCountLabel(stats.plantCounts[s] || 0, stats.plantCounts[s + 'Slots'] || 0)}</span></div>`
                     ).join('')}
                 </div>
             </div>
