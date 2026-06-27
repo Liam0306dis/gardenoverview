@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.25
+// @version      1.26
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -213,7 +213,7 @@
     const MUTATION_DEFAULTS = {
         wet: false, chilled: false, frozen: true,
         amberlit: true, dawnlit: true, dawncharged: true, ambercharged: true,
-        thunderstruck: true, rainbow: true, gold: true,
+        thunderstruck: true, thundercharged: true, rainbow: true, gold: true,
         none: true,
         combineRainbow: false, combineAmberDawn: false, combineDawnAmbercharged: false,
         combineFrozenThunderstruck: false
@@ -244,14 +244,16 @@
         const AMBERSHINE_MUTATION = 'Ambershine';
 
         const COLOR_MULT = { Gold: 25, Rainbow: 50 };
-        const WEATHER_MULT = { Wet: 2, Chilled: 2, Frozen: 6, Thunderstruck: 5 };
+        const WEATHER_MULT = { Wet: 2, Chilled: 2, Frozen: 6, Thunderstruck: 5, Thundercharged: 7 };
         const TIME_MULT = { Dawnlit: 4, Dawnbound: 7, Dawncharged: 7, Ambershine: 6, Amberbound: 10, Ambercharged: 10 };
         const WEATHER_TIME_COMBO = {
             "Wet+Dawnlit": 5, "Chilled+Dawnlit": 5, "Wet+Ambershine": 7, "Chilled+Ambershine": 7,
             "Frozen+Dawnlit": 9, "Frozen+Dawnbound": 12, "Frozen+Dawncharged": 12,
             "Frozen+Ambershine": 11, "Frozen+Amberbound": 15, "Frozen+Ambercharged": 15,
             "Thunderstruck+Dawnlit": 8, "Thunderstruck+Dawnbound": 11, "Thunderstruck+Dawncharged": 11,
-            "Thunderstruck+Ambershine": 10, "Thunderstruck+Amberbound": 14, "Thunderstruck+Ambercharged": 14
+            "Thunderstruck+Ambershine": 10, "Thunderstruck+Amberbound": 14, "Thunderstruck+Ambercharged": 14,
+            "Thundercharged+Dawnlit": 10, "Thundercharged+Dawnbound": 13, "Thundercharged+Dawncharged": 13,
+            "Thundercharged+Ambershine": 12, "Thundercharged+Amberbound": 16, "Thundercharged+Ambercharged": 16
         };
 
         const numFriendsInRoom = state.atoms.numFriendsInRoom;
@@ -275,11 +277,12 @@
 
         const stats = {
             missingRainbow: 0, missingGold: 0, goldCount: 0, missingFrozen: 0,
+            missingThunderstruck: 0,
             missingWet: 0, missingChilled: 0,
             missingAmber: 0, missingAmberlit: 0, missingAmbercharged: 0,
             missingDawnlit: 0, missingDawncharged: 0,
             missingAmberDawn: 0, missingDawnAmbercharged: 0,
-            frozenCount: 0, wetCount: 0, chilledCount: 0, thunderstruckCount: 0,
+            frozenCount: 0, wetCount: 0, chilledCount: 0, thunderstruckCount: 0, thunderchargedCount: 0,
             noMutations: 0, notMature: 0, notMaxSize: 0,
             readyNow: 0,
             boostsUntilMaxSize: 0, totalFarmValue: 0,
@@ -372,7 +375,7 @@
                 if (isTargetSpecies && mutations.includes(GOLD_MUTATION)) stats.goldCount++;
                 if (isTargetSpecies && !mutations.includes(GOLD_MUTATION) && !mutations.includes(RAINBOW_MUTATION)) stats.missingGold++;
                 if (isTargetSpecies && mutations.includes(FROZEN_MUTATION)) stats.frozenCount++;
-                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck')) stats.missingFrozen++;
+                if (isTargetSpecies && !mutations.includes(FROZEN_MUTATION) && !mutations.includes('Thunderstruck') && !mutations.includes('Thundercharged')) stats.missingFrozen++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit') && !mutations.includes('Dawncharged')) stats.missingAmber++;
                 if (isTargetSpecies && !mutations.includes(AMBERCHARGED_MUTATION)) stats.missingAmbercharged++;
                 if (isTargetSpecies) {
@@ -381,19 +384,25 @@
                 }
                 if (isTargetSpecies) {
                     const hasThunderstruck = mutations.includes('Thunderstruck');
+                    const hasThundercharged = mutations.includes('Thundercharged');
+                    const hasThunder = hasThunderstruck || hasThundercharged;
                     const hasFrozenMut = mutations.includes(FROZEN_MUTATION);
                     const hasWet = mutations.includes('Wet');
                     const hasChilled = mutations.includes('Chilled');
+                    const hasAnyWeather = hasWet || hasChilled || hasFrozenMut || hasThunder;
                     if (hasWet) stats.wetCount++;
-                    if (!hasWet && !hasThunderstruck && !hasFrozenMut) stats.missingWet++;
+                    if (!hasWet && !hasThunder && !hasFrozenMut) stats.missingWet++;
                     if (hasChilled) stats.chilledCount++;
-                    if (!hasChilled && !hasThunderstruck && !hasFrozenMut) stats.missingChilled++;
+                    if (!hasChilled && !hasThunder && !hasFrozenMut) stats.missingChilled++;
+                    // Thunderstruck only lands on slots with no weather mutation at all (Wet/Chilled/Frozen block it).
+                    if (!hasAnyWeather) stats.missingThunderstruck++;
                     if (!mutations.includes(AMBERSHINE_MUTATION))       stats.missingAmberlit++;
                     if (!mutations.includes('Dawnlit'))                 stats.missingDawnlit++;
                     if (!mutations.includes('Dawncharged'))             stats.missingDawncharged++;
                     if (!mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit'))           stats.missingAmberDawn++;
                     if (!mutations.includes('Dawncharged') && !mutations.includes(AMBERCHARGED_MUTATION))     stats.missingDawnAmbercharged++;
                     if (hasThunderstruck) stats.thunderstruckCount++;
+                    if (hasThundercharged) stats.thunderchargedCount++;
                 }
                 if (isTargetSpecies && mutations.length === 0) stats.noMutations++;
 
@@ -527,6 +536,9 @@
             rainbow:    getGranterETA(activePets, 'RainbowGranter',    0.72, stats.missingRainbow),
             gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
             frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
+            // Thunderstruck only lands on slots with no weather mutation at all (Wet/Chilled/Frozen/
+            // Thunderstruck/Thundercharged all block it), so it targets its own pool: missingThunderstruck.
+            thunderstruck: getGranterETA(activePets, 'ThunderstruckGranter', 5.0, stats.missingThunderstruck),
             // A slot can hold only one time mutation (Amberlit/Dawnlit/Amberbound/Dawnbound), so both
             // lit granters target the same pool: slots with no time mutation at all (missingAmber).
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
@@ -591,7 +603,8 @@
         const amberDawnHave         = totalSlots - stats.missingAmberDawn;
         const dawnAmberchargedHave  = totalSlots - stats.missingDawnAmbercharged;
         const thunderstruckHave         = stats.thunderstruckCount;
-        const frozenOrThunderstruckHave = stats.frozenCount + stats.thunderstruckCount;
+        const thunderchargedHave        = stats.thunderchargedCount;
+        const frozenOrThunderstruckHave = stats.frozenCount + stats.thunderstruckCount + stats.thunderchargedCount;
 
         function formatEtaSec(sec) {
             const totalMin = Math.round(sec / 60);
@@ -674,10 +687,11 @@
             if (mutConfig.gold)    goodBars += mutBar('Gold', '#ffd700', goldHave, totalSlots);
         }
         if (combineFrozenThunderstruck) {
-            goodBars += mutBar('Frozen / Thunderstruck', '#7ec8e3', frozenOrThunderstruckHave, totalSlots);
+            goodBars += mutBar('Frozen / Thunder', '#7ec8e3', frozenOrThunderstruckHave, totalSlots);
         } else {
-            if (mutConfig.frozen)       goodBars += mutBar('Frozen', '#7ec8e3', frozenHave, totalSlots);
+            if (mutConfig.frozen)        goodBars += mutBar('Frozen', '#7ec8e3', frozenHave, totalSlots);
             if (mutConfig.thunderstruck) goodBars += mutBar('Thunderstruck', '#ffd700', thunderstruckHave, totalSlots);
+            if (mutConfig.thundercharged) goodBars += mutBar('Thundercharged', '#fbbf24', thunderchargedHave, totalSlots);
         }
         if (mutConfig.wet)     goodBars += mutBar('Wet', '#4fc3f7', wetHave, totalSlots);
         if (mutConfig.chilled) goodBars += mutBar('Chilled', '#81d4fa', chilledHave, totalSlots);
@@ -698,6 +712,7 @@
         const etaRows = etaRow('&#x1F308; Rainbow', stats.missingRainbow, totalSlots, stats.granterETAs?.rainbow, rainbowGradient)
             + etaRow('&#x1FAB4; Gold', stats.missingGold, totalSlots, stats.granterETAs?.gold, '#ffd700')
             + etaRow('&#x2744;&#xFE0F; Frozen', stats.missingFrozen, totalSlots, stats.granterETAs?.frozen, '#7ec8e3')
+            + etaRow('&#x26A1; Thunderstruck', stats.missingThunderstruck, totalSlots, stats.granterETAs?.thunderstruck, '#ffd700')
             + etaRow('&#x1F4A7; Wet', stats.missingWet, totalSlots, stats.granterETAs?.wet, '#4fc3f7')
             + etaRow('&#x2745;&#xFE0F; Chilled', stats.missingChilled, totalSlots, stats.granterETAs?.chilled, '#81d4fa')
             + etaRow('&#x2728; Amberlit', stats.missingAmber, totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
@@ -1022,7 +1037,7 @@
 
                 const pillsWrap = document.createElement('div');
                 pillsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
-                [['rainbow','Rainbow'],['gold','Gold'],['frozen','Frozen'],['thunderstruck','Thunderstruck'],['wet','Wet'],['chilled','Chilled'],
+                [['rainbow','Rainbow'],['gold','Gold'],['frozen','Frozen'],['thunderstruck','Thunderstruck'],['thundercharged','Thundercharged'],['wet','Wet'],['chilled','Chilled'],
                  ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawnbound'],['ambercharged','Amberbound'],
                  ['none','None']
                 ].forEach(([key, label]) => {
