@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.31
+// @version      1.32
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -216,7 +216,8 @@
         thunderstruck: true, thundercharged: true, rainbow: true, gold: true,
         none: true,
         combineRainbow: false, combineAmberDawn: false, combineDawnAmbercharged: false,
-        combineFrozenThunderstruck: false
+        combineFrozenThunderstruck: false,
+        granterAllGarden: true
     };
 
     // === Helpers ===
@@ -341,7 +342,7 @@
             plantCounts: {},
             maxEndTime: 0, minEndTime: Infinity,
             // All-garden eligible-slot counts feeding the granter ETAs (granters act on the whole garden).
-            granterPool: { totalSlots: 0, rainbow: 0, gold: 0, frozen: 0, thunderstruck: 0, wet: 0, chilled: 0, amber: 0 },
+            granterPool: { totalSlots: 0, rainbow: 0, gold: 0, frozen: 0, thunderstruck: 0, wet: 0, chilled: 0, amber: 0, boosts: 0, boostsBee: 0 },
         };
 
         function asPetMaxScale(petSpecies) {
@@ -570,12 +571,13 @@
         const boostMultiplier = 1 + avgStr / 1000;
 
         // Crop-size granters boost the whole garden, so count boosts needed across all plant slots.
-        function countBoostsToMax(multiplier, capPerSlot) {
+        function countBoostsToMax(multiplier, capPerSlot, trackedOnly) {
             let maxBoostsNeeded = 0;
             Object.values(tileObjects).forEach(tile => {
                 if (tile.objectType !== 'plant' || !tile.slots?.length) return;
                 tile.slots.forEach(slot => {
                     const slotSpecies = slot.species || tile.species;
+                    if (trackedOnly && !trackedSpecies.includes(slotSpecies)) return;
                     const maxScale = _getPlantMaxScale(slotSpecies);
                     if (!maxScale) return;
                     let s = slot.targetScale || 1;
@@ -606,7 +608,23 @@
 
         stats.boostsUntilMaxSizeBee = countBoostsToMax(beeBoostMultiplier, 200);
 
-        // Counts come from granterPool (all garden slots), since granters act on the whole garden.
+        // Finish the whole-garden pool, then swap in the tracked pool if the ETA scope is "tracked only".
+        stats.granterPool.boosts    = stats.boostsUntilMaxSize;
+        stats.granterPool.boostsBee = stats.boostsUntilMaxSizeBee;
+        const granterAllGarden = (getMagicCircleValue('mutation_tracking', null) || {}).granterAllGarden !== false;
+        if (!granterAllGarden) {
+            const trackedTotalSlots = trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s + 'Slots'] || 0), 0);
+            stats.granterPool = {
+                totalSlots: trackedTotalSlots,
+                rainbow: stats.missingRainbow, gold: stats.missingGold, frozen: stats.missingFrozen,
+                thunderstruck: stats.missingThunderstruck, wet: stats.missingWet, chilled: stats.missingChilled,
+                amber: stats.missingAmber,
+                boosts: countBoostsToMax(boostMultiplier, 20, true),
+                boostsBee: countBoostsToMax(beeBoostMultiplier, 200, true),
+            };
+        }
+
+        // Counts come from granterPool — whole garden by default, or tracked-only per the scope toggle.
         const gp = stats.granterPool;
         stats.granterETAs = {
             rainbow:    getGranterETA(activePets, 'RainbowGranter',    0.72, gp.rainbow),
@@ -621,8 +639,8 @@
             dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  gp.amber),
             wet:         getGranterETA(activePets, 'RainDance',          10.0, gp.wet),
             chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  gp.chilled),
-            cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, stats.boostsUntilMaxSize),
-            cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
+            cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, gp.boosts),
+            cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, gp.boostsBee),
         };
         stats.trackedSpecies = trackedSpecies;
         stats.TRACKED_SPECIES_DEFAULTS = _defaults;
@@ -795,8 +813,8 @@
             + etaRow('&#x2745;&#xFE0F; Chilled', gp.chilled, gp.totalSlots, stats.granterETAs?.chilled, '#81d4fa')
             + etaRow('&#x2728; Amberlit', gp.amber, gp.totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
             + etaRow('&#x1F305; Dawnlit', gp.amber, gp.totalSlots, stats.granterETAs?.dawnlit, '#c084e8')
-            + etaRow('&#x1F331; Max Size', stats.boostsUntilMaxSize, null, stats.granterETAs?.cropSize, '#a78bfa', true)
-            + etaRow('&#x1F41D; Bee Size', stats.boostsUntilMaxSizeBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
+            + etaRow('&#x1F331; Max Size', gp.boosts, null, stats.granterETAs?.cropSize, '#a78bfa', true)
+            + etaRow('&#x1F41D; Bee Size', gp.boostsBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
         const hasETAs = etaRows.trim() !== '';
 
         let growthHTML;
@@ -1187,6 +1205,8 @@
                     ['combineRainbow','Rainbow+Gold'],['combineAmberDawn','Amberlit+Dawnlit'],
                     ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
                 ], c);
+                // Estimates scope: on = whole garden (granters act on all crops); off = tracked species only.
+                section('Estimate Scope', [['granterAllGarden','Whole garden']], c);
             }
 
             renderBody();
