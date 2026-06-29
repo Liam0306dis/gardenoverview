@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.30
+// @version      1.31
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -225,6 +225,58 @@
             const el = document.getElementById(id);
             if (el) { el._abort?.abort(); el.remove(); }
         });
+    }
+
+    // Shared scoped stylesheet for the config panels (pills, actions, search, section labels).
+    function _makeConfigStyle(id) {
+        const style = document.createElement('style');
+        style.textContent = `
+            #${id} .go-sp-section { font-size:9px; text-transform:uppercase; letter-spacing:0.08em; color:#4a8a8a; margin:9px 0 5px; }
+            #${id} .go-sp-section:first-child { margin-top:0; }
+            #${id} .go-sp-wrap { display:flex; flex-wrap:wrap; gap:4px; }
+            #${id} .go-sp-pill {
+                display:inline-flex; align-items:center; gap:5px;
+                padding:4px 9px; border-radius:8px;
+                border:1px solid #1e3a3a; background:#0c2020;
+                color:#8fc4c4; font-size:10px; font-family:monospace;
+                cursor:pointer; white-space:nowrap; user-select:none;
+                transition:background .12s ease, border-color .12s ease, color .12s ease, transform .06s ease;
+            }
+            #${id} .go-sp-pill:hover { border-color:#33807e; background:#123333; color:#d6f7f7; }
+            #${id} .go-sp-pill:active { transform:scale(0.95); }
+            #${id} .go-sp-pill.on {
+                border-color:#3aa6a0; background:linear-gradient(180deg,#11524d,#0c3d3a);
+                color:#eaffff; box-shadow:0 0 0 1px rgba(58,166,160,0.25), 0 1px 5px rgba(0,0,0,0.45);
+            }
+            #${id} .go-sp-pill.on:hover { background:linear-gradient(180deg,#136058,#0e4642); }
+            #${id} .go-sp-check { color:#41e0c8; font-size:9px; line-height:1; margin-top:1px; }
+            #${id} .go-sp-count { opacity:0.5; font-size:9px; }
+            #${id} .go-sp-action {
+                flex:1; padding:5px 6px; border-radius:7px;
+                border:1px solid #1e3a3a; background:#0c2020; color:#8fc4c4;
+                font-size:10px; cursor:pointer; font-family:monospace;
+                transition:background .12s ease, border-color .12s ease, color .12s ease;
+            }
+            #${id} .go-sp-action:hover { border-color:#33807e; background:#123333; color:#d6f7f7; }
+            #${id} .go-sp-search::placeholder { color:#3f6e6e; }
+            #${id} .go-sp-search:focus { border-color:#33807e; }
+        `;
+        return style;
+    }
+
+    // Slot counts per species currently planted in the garden (whole garden, not just tracked).
+    function _getGardenSpeciesCounts() {
+        const tileObjects = state.atoms.playerSlot?.data?.garden?.tileObjects;
+        const counts = new Map();
+        if (!tileObjects) return counts;
+        Object.values(tileObjects).forEach(function(tile) {
+            if (tile.objectType !== 'plant' || !tile.slots?.length) return;
+            tile.slots.forEach(function(slot) {
+                const sp = slot.species || tile.species || '';
+                if (sp) counts.set(sp, (counts.get(sp) || 0) + 1);
+            });
+        });
+        return counts;
     }
 
     function formatFarmValue(value) {
@@ -982,45 +1034,97 @@
             const existing = document.getElementById('go-species-config-gui');
             if (existing) { existing.remove(); return; }
 
+            const defaults = stats.TRACKED_SPECIES_DEFAULTS;
+            const allSpecies = Object.keys(defaults).sort((a, b) => a.localeCompare(b));
+            const gardenCounts = _getGardenSpeciesCounts();
+            let filter = '';
+
             const speciesGui = document.createElement('div');
             speciesGui.id = 'go-species-config-gui';
-            speciesGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:230px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+            speciesGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:270px;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+            speciesGui.appendChild(_makeConfigStyle('go-species-config-gui'));
 
-            function buildSpeciesPill(key, cfg) {
-                const on = !!cfg[key];
+            const config = () => Object.assign({}, defaults, getMagicCircleValue('tracked_species', null) || {});
+            const save = (c) => { setMagicCircleValue('tracked_species', c); updatePopupContent(popup); };
+
+            // Header (title + live count + close)
+            const hdr = document.createElement('div');
+            hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;flex:0 0 auto;';
+            const title = document.createElement('span');
+            title.style.cssText = 'font-size:11px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;';
+            const cb = document.createElement('button'); cb.textContent = '✕';
+            cb.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;flex:0 0 auto;';
+            cb.onclick = () => speciesGui.remove();
+            hdr.appendChild(title); hdr.appendChild(cb); speciesGui.appendChild(hdr);
+
+            // Toolbar (search + bulk actions)
+            const toolbar = document.createElement('div');
+            toolbar.style.cssText = 'padding:8px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid #1a2a2a;flex:0 0 auto;';
+            const search = document.createElement('input');
+            search.type = 'text'; search.placeholder = '🔍 search plants…'; search.className = 'go-sp-search';
+            search.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 9px;border-radius:7px;border:1px solid #1e3a3a;background:#061414;color:#d6f7f7;font-size:11px;font-family:monospace;outline:none;transition:border-color .12s ease;';
+            search.addEventListener('input', () => { filter = search.value; renderBody(); });
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex;gap:5px;';
+            const mkAction = (label, fn) => {
+                const b = document.createElement('button');
+                b.textContent = label; b.className = 'go-sp-action'; b.onclick = fn;
+                return b;
+            };
+            btnRow.appendChild(mkAction('All', () => { const c = config(); allSpecies.forEach(s => c[s] = true); save(c); renderBody(); }));
+            btnRow.appendChild(mkAction('None', () => { const c = config(); allSpecies.forEach(s => c[s] = false); save(c); renderBody(); }));
+            btnRow.appendChild(mkAction('Track owned', () => { const c = config(); gardenCounts.forEach((_n, s) => { if (s in defaults) c[s] = true; }); save(c); renderBody(); }));
+            toolbar.appendChild(search); toolbar.appendChild(btnRow); speciesGui.appendChild(toolbar);
+
+            // Scrollable body (sections)
+            const body = document.createElement('div');
+            body.style.cssText = 'padding:8px 10px;overflow-y:auto;flex:1 1 auto;';
+            speciesGui.appendChild(body);
+
+            function pill(key, on) {
+                const count = gardenCounts.get(key);
                 const btn = document.createElement('button');
-                btn.className = 'go-species-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
-                btn.style.cssText = 'padding:2px 6px;border-radius:10px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:9px;cursor:pointer;font-family:monospace;white-space:nowrap;';
+                btn.className = 'go-sp-pill' + (on ? ' on' : '');
+                btn.innerHTML = (on ? '<span class="go-sp-check">&#x2713;</span>' : '')
+                    + `<span>${key}</span>`
+                    + (count ? ` <span class="go-sp-count">&middot;${count}</span>` : '');
+                btn.onclick = () => { const c = config(); c[key] = !c[key]; save(c); renderBody(); };
                 return btn;
             }
 
-            function renderSpeciesGui() {
-                const c = Object.assign({}, stats.TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
-                speciesGui.innerHTML = '';
-                const hdr = document.createElement('div');
-                hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
-                hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x1F33F; Tracked Plants</span>';
-                const cb = document.createElement('button'); cb.textContent = '✕';
-                cb.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
-                cb.onclick = () => speciesGui.remove();
-                hdr.appendChild(cb); speciesGui.appendChild(hdr);
-                const body = document.createElement('div');
-                body.style.cssText = 'padding:8px 10px;max-height:70vh;overflow-y:auto;';
+            function section(label, list, c) {
+                if (!list.length) return;
+                const lbl = document.createElement('div');
+                lbl.className = 'go-sp-section'; lbl.textContent = label;
+                body.appendChild(lbl);
                 const wrap = document.createElement('div');
-                wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
-                Object.keys(stats.TRACKED_SPECIES_DEFAULTS).forEach(key => wrap.appendChild(buildSpeciesPill(key, c)));
-                body.appendChild(wrap); speciesGui.appendChild(body);
-                speciesGui.querySelectorAll('.go-species-pill').forEach(pill => {
-                    pill.addEventListener('click', function(ev) {
-                        ev.preventDefault(); ev.stopPropagation();
-                        const latest = Object.assign({}, stats.TRACKED_SPECIES_DEFAULTS, getMagicCircleValue('tracked_species', null) || {});
-                        latest[pill.getAttribute('data-key')] = !latest[pill.getAttribute('data-key')];
-                        setMagicCircleValue('tracked_species', latest);
-                        renderSpeciesGui(); updatePopupContent(popup);
-                    });
-                });
+                wrap.className = 'go-sp-wrap';
+                list.forEach(s => wrap.appendChild(pill(s, !!c[s])));
+                body.appendChild(wrap);
             }
-            renderSpeciesGui();
+
+            function renderBody() {
+                const c = config();
+                const trackedCount = allSpecies.filter(s => c[s]).length;
+                title.innerHTML = `&#x1F33F; Tracked Plants <span style="color:#4a8a8a;font-weight:normal;">(${trackedCount})</span>`;
+                const f = filter.trim().toLowerCase();
+                const match = (s) => !f || s.toLowerCase().includes(f);
+                const tracked = allSpecies.filter(s => c[s] && match(s));
+                const ownedUntracked = allSpecies.filter(s => !c[s] && gardenCounts.has(s) && match(s));
+                const rest = allSpecies.filter(s => !c[s] && !gardenCounts.has(s) && match(s));
+                body.innerHTML = '';
+                section(`★ Tracked (${tracked.length})`, tracked, c);
+                section('🌱 In your garden', ownedUntracked, c);
+                section('All plants', rest, c);
+                if (!tracked.length && !ownedUntracked.length && !rest.length) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:10px;color:#4a8a8a;padding:10px 2px;';
+                    empty.textContent = 'No plants match your search.';
+                    body.appendChild(empty);
+                }
+            }
+
+            renderBody();
             document.body.appendChild(speciesGui);
             speciesGui.style.left = Math.round((window.innerWidth  - speciesGui.offsetWidth)  / 2) + 'px';
             speciesGui.style.top  = Math.round((window.innerHeight - speciesGui.offsetHeight) / 2) + 'px';
@@ -1034,68 +1138,58 @@
 
             const cfgGui = document.createElement('div');
             cfgGui.id = 'go-mut-config-gui';
-            cfgGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+            cfgGui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:240px;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+            cfgGui.appendChild(_makeConfigStyle('go-mut-config-gui'));
 
-            function buildPill(key, cfg) {
-                const on = cfg[key] !== false;
+            const config = () => Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
+            const save = (c) => { setMagicCircleValue('mutation_tracking', c); updatePopupContent(popup); };
+
+            // Header
+            const hdr = document.createElement('div');
+            hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;flex:0 0 auto;';
+            hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;">&#x2699; Mutation Config</span>';
+            const cb = document.createElement('button'); cb.textContent = '✕';
+            cb.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;flex:0 0 auto;';
+            cb.onclick = () => cfgGui.remove();
+            hdr.appendChild(cb); cfgGui.appendChild(hdr);
+
+            // Scrollable body
+            const body = document.createElement('div');
+            body.style.cssText = 'padding:10px 12px;overflow-y:auto;flex:1 1 auto;';
+            cfgGui.appendChild(body);
+
+            function pill(key, label, on) {
                 const btn = document.createElement('button');
-                btn.className = 'go-mut-cfg-pill'; btn.setAttribute('data-key', key); btn.textContent = key;
-                btn.style.cssText = 'padding:3px 10px;border-radius:12px;border:1px solid ' + (on ? '#2a6a6a' : '#1a3a3a') + ';background:' + (on ? '#0f3a3a' : '#061414') + ';color:' + (on ? '#a4f5f5' : '#4a8a8a') + ';font-size:11px;cursor:pointer;font-family:monospace;';
+                btn.className = 'go-sp-pill' + (on ? ' on' : '');
+                btn.innerHTML = (on ? '<span class="go-sp-check">&#x2713;</span>' : '') + `<span>${label}</span>`;
+                btn.onclick = () => { const c = config(); c[key] = !c[key]; save(c); renderBody(); };
                 return btn;
             }
 
-            function renderCfgGui() {
-                const c = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
-                cfgGui.innerHTML = '';
-                const hdr = document.createElement('div');
-                hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
-                hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x2699; Mutation Config</span>';
-                const cb = document.createElement('button'); cb.textContent = '✕';
-                cb.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
-                cb.onclick = () => cfgGui.remove();
-                hdr.appendChild(cb); cfgGui.appendChild(hdr);
-                const body = document.createElement('div');
-                body.style.cssText = 'padding:10px 12px;display:flex;flex-direction:column;gap:10px;';
-
-                const trackLbl = document.createElement('div');
-                trackLbl.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:#4a8a8a;';
-                trackLbl.textContent = 'Track Mutations'; body.appendChild(trackLbl);
-
-                const pillsWrap = document.createElement('div');
-                pillsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
-                [['rainbow','Rainbow'],['gold','Gold'],['frozen','Frozen'],['thunderstruck','Thunderstruck'],['thundercharged','Thundercharged'],['wet','Wet'],['chilled','Chilled'],
-                 ['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawnbound'],['ambercharged','Amberbound'],
-                 ['none','None']
-                ].forEach(([key, label]) => {
-                    const btn = buildPill(key, c); btn.textContent = label; pillsWrap.appendChild(btn);
-                });
-                body.appendChild(pillsWrap);
-
-                const combineLbl = document.createElement('div');
-                combineLbl.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:#4a8a8a;';
-                combineLbl.textContent = 'Combine Bars'; body.appendChild(combineLbl);
-
-                const combineWrap = document.createElement('div');
-                combineWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
-                [['combineRainbow','Rainbow+Gold'],['combineAmberDawn','Amberlit+Dawnlit'],
-                 ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
-                ].forEach(([key, label]) => {
-                    const btn = buildPill(key, c); btn.textContent = label; combineWrap.appendChild(btn);
-                });
-                body.appendChild(combineWrap);
-                cfgGui.appendChild(body);
-
-                cfgGui.querySelectorAll('.go-mut-cfg-pill').forEach(pill => {
-                    pill.addEventListener('click', function(ev) {
-                        ev.preventDefault(); ev.stopPropagation();
-                        const latest = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
-                        latest[pill.getAttribute('data-key')] = !latest[pill.getAttribute('data-key')];
-                        setMagicCircleValue('mutation_tracking', latest);
-                        renderCfgGui(); updatePopupContent(popup);
-                    });
-                });
+            function section(label, pairs, c) {
+                const lbl = document.createElement('div');
+                lbl.className = 'go-sp-section'; lbl.textContent = label;
+                body.appendChild(lbl);
+                const wrap = document.createElement('div');
+                wrap.className = 'go-sp-wrap';
+                pairs.forEach(([key, label2]) => wrap.appendChild(pill(key, label2, !!c[key])));
+                body.appendChild(wrap);
             }
-            renderCfgGui();
+
+            function renderBody() {
+                const c = config();
+                body.innerHTML = '';
+                section('Color', [['rainbow','Rainbow'],['gold','Gold']], c);
+                section('Weather', [['frozen','Frozen'],['thunderstruck','Thunderstruck'],['thundercharged','Thundercharged'],['wet','Wet'],['chilled','Chilled']], c);
+                section('Time', [['amberlit','Amberlit'],['dawnlit','Dawnlit'],['dawncharged','Dawnbound'],['ambercharged','Amberbound']], c);
+                section('Other', [['none','None']], c);
+                section('Combine Bars', [
+                    ['combineRainbow','Rainbow+Gold'],['combineAmberDawn','Amberlit+Dawnlit'],
+                    ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
+                ], c);
+            }
+
+            renderBody();
             document.body.appendChild(cfgGui);
             cfgGui.style.left = Math.round((window.innerWidth  - cfgGui.offsetWidth)  / 2) + 'px';
             cfgGui.style.top  = Math.round((window.innerHeight - cfgGui.offsetHeight) / 2) + 'px';
