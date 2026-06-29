@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.26
+// @version      1.30
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -288,6 +288,8 @@
             boostsUntilMaxSize: 0, totalFarmValue: 0,
             plantCounts: {},
             maxEndTime: 0, minEndTime: Infinity,
+            // All-garden eligible-slot counts feeding the granter ETAs (granters act on the whole garden).
+            granterPool: { totalSlots: 0, rainbow: 0, gold: 0, frozen: 0, thunderstruck: 0, wet: 0, chilled: 0, amber: 0 },
         };
 
         function asPetMaxScale(petSpecies) {
@@ -360,6 +362,26 @@
                 const isTargetSpecies = trackedSpecies.includes(slotSpecies);
                 const maxScale = _getPlantMaxScale(slotSpecies);
                 const mutations = slot.mutations || [];
+
+                // All-garden granter pool — granters act on every plant slot, tracked or not, so the
+                // ETA math counts the whole garden (mirrors the tracked "missing" conditions below).
+                {
+                    const gpFrozen     = mutations.includes(FROZEN_MUTATION);
+                    const gpThunder    = mutations.includes('Thunderstruck') || mutations.includes('Thundercharged');
+                    const gpWet        = mutations.includes('Wet');
+                    const gpChilled    = mutations.includes('Chilled');
+                    const gpAnyWeather = gpWet || gpChilled || gpFrozen || gpThunder;
+                    const gpColor      = mutations.includes(RAINBOW_MUTATION) || mutations.includes(GOLD_MUTATION);
+                    const gpNoTime     = !mutations.includes(AMBERCHARGED_MUTATION) && !mutations.includes(AMBERSHINE_MUTATION) && !mutations.includes('Dawnlit') && !mutations.includes('Dawncharged');
+                    const gp = stats.granterPool;
+                    gp.totalSlots++;
+                    if (!gpColor) { gp.rainbow++; gp.gold++; }
+                    if (!gpFrozen && !gpThunder) gp.frozen++;
+                    if (!gpAnyWeather) gp.thunderstruck++;
+                    if (!gpWet && !gpThunder && !gpFrozen) gp.wet++;
+                    if (!gpChilled && !gpThunder && !gpFrozen) gp.chilled++;
+                    if (gpNoTime) gp.amber++;
+                }
 
                 if (isTargetSpecies) {
                     stats.plantCounts[slotSpecies + 'Slots'] = (stats.plantCounts[slotSpecies + 'Slots'] || 0) + 1;
@@ -495,13 +517,13 @@
         const avgStr = scaleBoostStrs.length ? scaleBoostStrs.reduce((a, b) => a + b, 0) / scaleBoostStrs.length : 87;
         const boostMultiplier = 1 + avgStr / 1000;
 
+        // Crop-size granters boost the whole garden, so count boosts needed across all plant slots.
         function countBoostsToMax(multiplier, capPerSlot) {
             let maxBoostsNeeded = 0;
             Object.values(tileObjects).forEach(tile => {
                 if (tile.objectType !== 'plant' || !tile.slots?.length) return;
                 tile.slots.forEach(slot => {
                     const slotSpecies = slot.species || tile.species;
-                    if (!trackedSpecies.includes(slotSpecies)) return;
                     const maxScale = _getPlantMaxScale(slotSpecies);
                     if (!maxScale) return;
                     let s = slot.targetScale || 1;
@@ -532,19 +554,21 @@
 
         stats.boostsUntilMaxSizeBee = countBoostsToMax(beeBoostMultiplier, 200);
 
+        // Counts come from granterPool (all garden slots), since granters act on the whole garden.
+        const gp = stats.granterPool;
         stats.granterETAs = {
-            rainbow:    getGranterETA(activePets, 'RainbowGranter',    0.72, stats.missingRainbow),
-            gold:       getGranterETA(activePets, 'GoldGranter',       0.72, stats.missingGold),
-            frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  stats.missingFrozen),
+            rainbow:    getGranterETA(activePets, 'RainbowGranter',    0.72, gp.rainbow),
+            gold:       getGranterETA(activePets, 'GoldGranter',       0.72, gp.gold),
+            frozen:     getGranterETA(activePets, 'FrostGranter',      6.0,  gp.frozen),
             // Thunderstruck only lands on slots with no weather mutation at all (Wet/Chilled/Frozen/
-            // Thunderstruck/Thundercharged all block it), so it targets its own pool: missingThunderstruck.
-            thunderstruck: getGranterETA(activePets, 'ThunderstruckGranter', 5.0, stats.missingThunderstruck),
+            // Thunderstruck/Thundercharged all block it), so it targets its own pool.
+            thunderstruck: getGranterETA(activePets, 'ThunderstruckGranter', 5.0, gp.thunderstruck),
             // A slot can hold only one time mutation (Amberlit/Dawnlit/Amberbound/Dawnbound), so both
-            // lit granters target the same pool: slots with no time mutation at all (missingAmber).
-            amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  stats.missingAmber),
-            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  stats.missingAmber),
-            wet:         getGranterETA(activePets, 'RainDance',          10.0, stats.missingWet),
-            chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  stats.missingChilled),
+            // lit granters target the same pool: slots with no time mutation at all.
+            amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  gp.amber),
+            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  gp.amber),
+            wet:         getGranterETA(activePets, 'RainDance',          10.0, gp.wet),
+            chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  gp.chilled),
             cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, stats.boostsUntilMaxSize),
             cropSizeBee: getGranterETA(activePets, 'ProduceScaleBoost', 0.30, stats.boostsUntilMaxSizeBee),
         };
@@ -709,14 +733,16 @@
         }
         const badBars = (mutConfig.none ? badMutBar('None', '#c084e8', stats.noMutations, totalSlots) : '');
 
-        const etaRows = etaRow('&#x1F308; Rainbow', stats.missingRainbow, totalSlots, stats.granterETAs?.rainbow, rainbowGradient)
-            + etaRow('&#x1FAB4; Gold', stats.missingGold, totalSlots, stats.granterETAs?.gold, '#ffd700')
-            + etaRow('&#x2744;&#xFE0F; Frozen', stats.missingFrozen, totalSlots, stats.granterETAs?.frozen, '#7ec8e3')
-            + etaRow('&#x26A1; Thunderstruck', stats.missingThunderstruck, totalSlots, stats.granterETAs?.thunderstruck, '#ffd700')
-            + etaRow('&#x1F4A7; Wet', stats.missingWet, totalSlots, stats.granterETAs?.wet, '#4fc3f7')
-            + etaRow('&#x2745;&#xFE0F; Chilled', stats.missingChilled, totalSlots, stats.granterETAs?.chilled, '#81d4fa')
-            + etaRow('&#x2728; Amberlit', stats.missingAmber, totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
-            + etaRow('&#x1F305; Dawnlit', stats.missingAmber, totalSlots, stats.granterETAs?.dawnlit, '#c084e8')
+        // ETA rows use the all-garden granter pool (granters work the whole garden, not just tracked species).
+        const gp = stats.granterPool;
+        const etaRows = etaRow('&#x1F308; Rainbow', gp.rainbow, gp.totalSlots, stats.granterETAs?.rainbow, rainbowGradient)
+            + etaRow('&#x1FAB4; Gold', gp.gold, gp.totalSlots, stats.granterETAs?.gold, '#ffd700')
+            + etaRow('&#x2744;&#xFE0F; Frozen', gp.frozen, gp.totalSlots, stats.granterETAs?.frozen, '#7ec8e3')
+            + etaRow('&#x26A1; Thunderstruck', gp.thunderstruck, gp.totalSlots, stats.granterETAs?.thunderstruck, '#ffd700')
+            + etaRow('&#x1F4A7; Wet', gp.wet, gp.totalSlots, stats.granterETAs?.wet, '#4fc3f7')
+            + etaRow('&#x2745;&#xFE0F; Chilled', gp.chilled, gp.totalSlots, stats.granterETAs?.chilled, '#81d4fa')
+            + etaRow('&#x2728; Amberlit', gp.amber, gp.totalSlots, stats.granterETAs?.amberlit, '#ff8c00')
+            + etaRow('&#x1F305; Dawnlit', gp.amber, gp.totalSlots, stats.granterETAs?.dawnlit, '#c084e8')
             + etaRow('&#x1F331; Max Size', stats.boostsUntilMaxSize, null, stats.granterETAs?.cropSize, '#a78bfa', true)
             + etaRow('&#x1F41D; Bee Size', stats.boostsUntilMaxSizeBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
         const hasETAs = etaRows.trim() !== '';
