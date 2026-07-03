@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.32
+// @version      1.33
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -25,7 +25,6 @@
     const targetWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
     console.log('[GardenOverview] unsafeWindow available:', typeof unsafeWindow !== 'undefined');
     let _keybind = null;
-    const hookedAtoms = new Set();
 
     // === Pet + Plant catalog capture ===
     let _asPetCatalog = null;
@@ -153,53 +152,74 @@
     function getMagicCircleValue(key, defaultValue) {
         try { return GM_getValue('magiccircle_' + key, defaultValue); } catch(e) { return defaultValue; }
     }
-
-    // === Atom hooks ===
-    function hookAtom(atomPath, key, retryCount = 0) {
-        const hookKey = atomPath + '_' + key;
-        if (hookedAtoms.has(hookKey)) return;
-
-        const atomCache = targetWindow.jotaiAtomCache?.cache || targetWindow.jotaiAtomCache;
-        const atom = atomCache?.get?.(atomPath);
-
-        if (!atom || typeof atom.read !== 'function') {
-            if (retryCount < 60) setTimeout(() => hookAtom(atomPath, key, retryCount + 1), 500);
-            else console.warn('[GardenOverview] Gave up hooking atom after 30s:', key);
+    let _wsPlayerId = null;
+    function _wsReadPlayerId() {
+        try {
+            const ws = targetWindow.MagicCircle_RoomConnection && targetWindow.MagicCircle_RoomConnection.currentWebSocket;
+            if (!ws || !ws.url) return null;
+            let pid = new URL(ws.url).searchParams.get('playerId');
+            if (pid == null) return null;
+            // URL param is JSON-quoted (e.g. "p_xxx") — strip the literal quotes.
+            if (pid.length >= 2 && pid.charAt(0) === '"' && pid.charAt(pid.length - 1) === '"') {
+                try { pid = JSON.parse(pid); } catch (e) { pid = pid.slice(1, -1); }
+            }
+            return pid;
+        } catch (e) { return null; }
+    }
+    function _wsPickMySlot(game, room, pid) {
+        const slots = game && Array.isArray(game.userSlots) ? game.userSlots : null;
+        if (!slots) return null;
+        // Manual loops — predicate array methods can misbehave on the game's
+        // page-realm arrays under some userscript managers.
+        if (pid) {
+            for (let i = 0; i < slots.length; i++) {
+                const s = slots[i];
+                if (s && (s.playerId === pid || (s.data && s.data.playerId === pid))) return s;
+            }
+        }
+        let dbId;
+        const players = room && Array.isArray(room.players) ? room.players : null;
+        if (players) {
+            for (let j = 0; j < players.length; j++) {
+                if (players[j] && players[j].id === pid) { dbId = players[j].databaseUserId; break; }
+            }
+        }
+        if (dbId != null) {
+            for (let k = 0; k < slots.length; k++) {
+                const d = slots[k] && slots[k].data;
+                if (d && (d.databaseUserId === dbId || d.userId === dbId)) return slots[k];
+            }
+        }
+        return null;
+    }
+    function initWsState() {
+        const conn = targetWindow.MagicCircle_RoomConnection;
+        if (!conn || typeof conn.subscribeToPatches !== 'function') {
+            setTimeout(initWsState, 1000); // connection/API not ready yet — retry
             return;
         }
-
-        hookedAtoms.add(hookKey);
-        const originalRead = atom.read;
-        atom.read = function(get) {
-            const value = originalRead.call(this, get);
-            if (!(key in state.atoms)) {
-                let preview;
-                try { preview = JSON.stringify(value)?.slice(0, 300); } catch(err) { preview = '<unserializable>'; }
-                console.log('[GardenOverview] Atom captured:', key, '→', preview);
-            }
-            state.atoms[key] = value;
-            return value;
-        };
-    }
-
-    function initAtomHooks() {
-        const atoms = [
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/baseAtoms.ts/myUserSlotAtom',              'playerSlot'],
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/myAtoms.ts/myPrimitivePetSlotsAtom',        'activePets'],
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/inventoryAtoms.ts/myInventoryAtom',         'inventory'],
-            ['/home/runner/work/magiccircle.gg/magiccircle.gg/client/src/games/Quinoa/atoms/miscAtoms.ts/numFriendsInRoomAtom',         'numFriendsInRoom'],
-        ];
-
-        console.log('[GardenOverview] Waiting for jotaiAtomCache...');
-        const hookAll = () => atoms.forEach(([path, key]) => hookAtom(path, key));
-        const interval = setInterval(() => {
-            const cache = targetWindow.jotaiAtomCache?.cache || targetWindow.jotaiAtomCache;
-            if (cache?.size > 0) {
-                console.log('[GardenOverview] jotaiAtomCache found, size:', cache.size, '- hooking atoms');
-                hookAll();
-                clearInterval(interval);
-            }
-        }, 500);
+        try {
+            conn.subscribeToPatches((patches, fullState) => {
+                try {
+                    const room = fullState && fullState.data ? fullState.data : null;
+                    const game = fullState && fullState.child && fullState.child.data ? fullState.child.data : null;
+                    if (!_wsPlayerId) _wsPlayerId = _wsReadPlayerId();
+                    const mySlot = _wsPickMySlot(game, room, _wsPlayerId);
+                    if (mySlot && mySlot.data) {
+                        state.atoms.playerSlot = mySlot;
+                        if (mySlot.data.inventory) state.atoms.inventory = mySlot.data.inventory;
+                        if (Array.isArray(mySlot.data.petSlots)) state.atoms.activePets = mySlot.data.petSlots;
+                    }
+                    if (room && Array.isArray(room.players)) {
+                        state.atoms.numFriendsInRoom = Math.max(0, room.players.length - 1);
+                    }
+                } catch (e) { /* ignore per-update errors */ }
+            });
+            console.log('[GardenOverview] Subscribed to room patches (WS state)');
+        } catch (e) {
+            console.warn('[GardenOverview] subscribeToPatches failed:', e);
+            setTimeout(initWsState, 2000);
+        }
     }
 
     // === Constants ===
@@ -1348,7 +1368,7 @@
 
     // === Init ===
     console.log('[GardenOverview] Init, document.readyState:', document.readyState, '| document.body:', !!document.body);
-    initAtomHooks();
+    initWsState();
 
     if (document.body) {
         createTriggerButton();
