@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.33
+// @version      1.36
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -153,6 +153,14 @@
         try { return GM_getValue('magiccircle_' + key, defaultValue); } catch(e) { return defaultValue; }
     }
     let _wsPlayerId = null;
+    let _wsLoggedPlayerId = null;
+    function _wsReadSelfPlayerId(fullState, room, game) {
+        const id =
+            (fullState && typeof fullState.selfPlayerId === 'string' ? fullState.selfPlayerId : null) ||
+            (room && typeof room.selfPlayerId === 'string' ? room.selfPlayerId : null) ||
+            (game && typeof game.selfPlayerId === 'string' ? game.selfPlayerId : null);
+        return id || null;
+    }
     function _wsReadPlayerId() {
         try {
             const ws = targetWindow.MagicCircle_RoomConnection && targetWindow.MagicCircle_RoomConnection.currentWebSocket;
@@ -203,7 +211,11 @@
                 try {
                     const room = fullState && fullState.data ? fullState.data : null;
                     const game = fullState && fullState.child && fullState.child.data ? fullState.child.data : null;
-                    if (!_wsPlayerId) _wsPlayerId = _wsReadPlayerId();
+                    _wsPlayerId = _wsReadSelfPlayerId(fullState, room, game) || _wsPlayerId || _wsReadPlayerId();
+                    if (_wsPlayerId && _wsPlayerId !== _wsLoggedPlayerId) {
+                        _wsLoggedPlayerId = _wsPlayerId;
+                        console.log('[GardenOverview] playerId resolved:', _wsPlayerId);
+                    }
                     const mySlot = _wsPickMySlot(game, room, _wsPlayerId);
                     if (mySlot && mySlot.data) {
                         state.atoms.playerSlot = mySlot;
@@ -237,8 +249,98 @@
         none: true,
         combineRainbow: false, combineAmberDawn: false, combineDawnAmbercharged: false,
         combineFrozenThunderstruck: false,
-        granterAllGarden: true
+        granterAllGarden: true,
+        ignorePreserved: true
     };
+    function shouldIgnorePreservedSlot(slot) {
+        const config = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
+        return config.ignorePreserved !== false && slot?.preserved === true;
+    }
+
+    let _granterAlarmAudioCtx = null;
+    let _granterAlarmInterval = null;
+    let _granterAlarmBanner = null;
+    const _granterAlarmCompleted = new Set();
+
+    function _getGranterAlarmAudioCtx() {
+        if (!_granterAlarmAudioCtx || _granterAlarmAudioCtx.state === 'closed') {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            _granterAlarmAudioCtx = new AudioCtx();
+        }
+        if (_granterAlarmAudioCtx.state === 'suspended') void _granterAlarmAudioCtx.resume();
+        return _granterAlarmAudioCtx;
+    }
+
+    function _playGranterAlarmTone(ctx, frequency) {
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.38);
+        oscillator.start(ctx.currentTime);
+        oscillator.stop(ctx.currentTime + 0.4);
+    }
+
+    function _startGranterAlarmSound() {
+        if (_granterAlarmInterval) clearInterval(_granterAlarmInterval);
+        const ctx = _getGranterAlarmAudioCtx();
+        const pattern = [880, 660, 880, 660, 0];
+        let phase = 0;
+        const tick = () => {
+            const frequency = pattern[phase % pattern.length];
+            if (frequency) _playGranterAlarmTone(ctx, frequency);
+            phase++;
+        };
+        tick();
+        _granterAlarmInterval = setInterval(tick, 420);
+    }
+
+    function _stopGranterAlarm() {
+        if (_granterAlarmInterval) clearInterval(_granterAlarmInterval);
+        _granterAlarmInterval = null;
+        _granterAlarmBanner?.remove();
+        _granterAlarmBanner = null;
+    }
+
+    function _showGranterAlarmBanner(message) {
+        _granterAlarmBanner?.remove();
+        if (!document.getElementById('go-granter-alarm-style')) {
+            const style = document.createElement('style');
+            style.id = 'go-granter-alarm-style';
+            style.textContent = `
+                @keyframes go-granter-alarm-pulse {
+                    0%,100% { border-color:rgba(190,140,255,0.6);box-shadow:0 0 22px rgba(140,90,255,0.35),0 8px 40px rgba(0,0,0,0.8); }
+                    50% { border-color:rgba(255,200,80,0.9);box-shadow:0 0 44px rgba(255,170,40,0.55),0 8px 40px rgba(0,0,0,0.8); }
+                }
+                #go-granter-alarm-stop:hover { background:rgba(255,255,255,0.22) !important; }
+            `;
+            document.head.appendChild(style);
+        }
+        const banner = document.createElement('div');
+        banner.id = 'go-granter-alarm-banner';
+        banner.style.cssText = `
+            position:fixed;top:22px;left:50%;transform:translateX(-50%);
+            background:rgba(14,8,24,0.97);border:2px solid rgba(190,140,255,0.6);
+            border-radius:14px;padding:13px 18px;z-index:999999;font-family:sans-serif;
+            display:flex;align-items:center;gap:14px;max-width:min(560px,calc(100vw - 24px));
+            box-shadow:0 0 22px rgba(140,90,255,0.35),0 8px 40px rgba(0,0,0,0.8);
+            animation:go-granter-alarm-pulse 1.1s ease-in-out infinite;pointer-events:all;user-select:none;
+        `;
+        banner.innerHTML = `
+            <span style="font-size:26px;line-height:1;flex-shrink:0;">&#x1F514;</span>
+            <div style="min-width:0;flex:1;">
+                <div style="font-size:10px;color:#888;letter-spacing:1.5px;font-weight:bold;margin-bottom:3px;">GRANTER COMPLETE</div>
+                <div style="font-size:15px;color:#fff;font-weight:bold;overflow-wrap:anywhere;">${message}</div>
+            </div>
+            <button id="go-granter-alarm-stop" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:12px;font-weight:bold;letter-spacing:0.5px;flex-shrink:0;">&#x25A0; Stop</button>
+        `;
+        document.body.appendChild(banner);
+        _granterAlarmBanner = banner;
+        banner.querySelector('#go-granter-alarm-stop').addEventListener('click', _stopGranterAlarm);
+    }
 
     // === Helpers ===
     function removeConfigGuis() {
@@ -293,6 +395,7 @@
         Object.values(tileObjects).forEach(function(tile) {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
             tile.slots.forEach(function(slot) {
+                if (shouldIgnorePreservedSlot(slot)) return;
                 const sp = slot.species || tile.species || '';
                 if (sp) counts.set(sp, (counts.get(sp) || 0) + 1);
             });
@@ -341,6 +444,8 @@
         const _defaults = _getTrackedSpeciesDefaults();
         const trackedSpeciesConfig = Object.assign({}, _defaults, getMagicCircleValue('tracked_species', null) || {});
         const trackedSpecies = Object.keys(trackedSpeciesConfig).filter(k => trackedSpeciesConfig[k]);
+        const mutationConfig = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
+        const ignorePreserved = mutationConfig.ignorePreserved !== false;
 
         const currentTime = Date.now();
         const activePets = state.atoms.activePets || [];
@@ -426,11 +531,13 @@
         Object.entries(tileObjects).forEach(([tileId, tile]) => {
             if (tile.objectType !== 'plant' || !tile.slots?.length) return;
 
-            if (trackedSpecies.includes(tile.species)) {
+            const eligibleSlots = ignorePreserved ? tile.slots.filter(slot => slot.preserved !== true) : tile.slots;
+            if (trackedSpecies.includes(tile.species) && eligibleSlots.length > 0) {
                 stats.plantCounts[tile.species] = (stats.plantCounts[tile.species] || 0) + 1;
             }
 
             tile.slots.forEach((slot, slotIndex) => {
+                if (ignorePreserved && slot.preserved === true) return;
                 const slotSpecies = slot.species || tile.species;
                 const isTargetSpecies = trackedSpecies.includes(slotSpecies);
                 const maxScale = _getPlantMaxScale(slotSpecies);
@@ -596,6 +703,7 @@
             Object.values(tileObjects).forEach(tile => {
                 if (tile.objectType !== 'plant' || !tile.slots?.length) return;
                 tile.slots.forEach(slot => {
+                    if (ignorePreserved && slot.preserved === true) return;
                     const slotSpecies = slot.species || tile.species;
                     if (trackedOnly && !trackedSpecies.includes(slotSpecies)) return;
                     const maxScale = _getPlantMaxScale(slotSpecies);
@@ -631,7 +739,7 @@
         // Finish the whole-garden pool, then swap in the tracked pool if the ETA scope is "tracked only".
         stats.granterPool.boosts    = stats.boostsUntilMaxSize;
         stats.granterPool.boostsBee = stats.boostsUntilMaxSizeBee;
-        const granterAllGarden = (getMagicCircleValue('mutation_tracking', null) || {}).granterAllGarden !== false;
+        const granterAllGarden = mutationConfig.granterAllGarden !== false;
         if (!granterAllGarden) {
             const trackedTotalSlots = trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s + 'Slots'] || 0), 0);
             stats.granterPool = {
@@ -668,12 +776,45 @@
         return stats;
     }
 
+    function _checkGranterCompletionAlarm(stats) {
+        if (!getMagicCircleValue('granter_completion_alarm', false) || !stats) return;
+        const gp = stats.granterPool;
+        const etas = stats.granterETAs || {};
+        const rows = [
+            { key: 'rainbow', label: 'Rainbow', missing: gp.rainbow, total: gp.totalSlots, eta: etas.rainbow },
+            { key: 'gold', label: 'Gold', missing: gp.gold, total: gp.totalSlots, eta: etas.gold },
+            { key: 'frozen', label: 'Frozen', missing: gp.frozen, total: gp.totalSlots, eta: etas.frozen },
+            { key: 'thunderstruck', label: 'Thunderstruck', missing: gp.thunderstruck, total: gp.totalSlots, eta: etas.thunderstruck },
+            { key: 'wet', label: 'Wet', missing: gp.wet, total: gp.totalSlots, eta: etas.wet },
+            { key: 'chilled', label: 'Chilled', missing: gp.chilled, total: gp.totalSlots, eta: etas.chilled },
+            { key: 'amberlit', label: 'Amberlit', missing: gp.amber, total: gp.totalSlots, eta: etas.amberlit },
+            { key: 'dawnlit', label: 'Dawnlit', missing: gp.amber, total: gp.totalSlots, eta: etas.dawnlit },
+            { key: 'cropSize', label: 'Max Size', missing: gp.boosts, total: null, eta: etas.cropSize },
+            { key: 'cropSizeBee', label: 'Bee Size', missing: gp.boostsBee, total: null, eta: etas.cropSizeBee },
+        ];
+        const completed = [];
+        for (const row of rows) {
+            const active = !!row.eta && gp.totalSlots > 0;
+            if (!active || row.missing > 0) {
+                _granterAlarmCompleted.delete(row.key);
+                continue;
+            }
+            if (_granterAlarmCompleted.has(row.key)) continue;
+            _granterAlarmCompleted.add(row.key);
+            completed.push(row.total == null ? row.label : `${row.label} ${row.total}/${row.total}`);
+        }
+        if (!completed.length) return;
+        _showGranterAlarmBanner(`${completed.join(' | ')} complete!`);
+        _startGranterAlarmSound();
+    }
+
     // === updatePopupContent ===
     function updatePopupContent(popup) {
         if (!popup) popup = document.getElementById('go-farm-stats-popup');
         if (!popup) return;
         const stats = getFarmStatsData();
         if (!stats) return;
+        _checkGranterCompletionAlarm(stats);
 
         const totalSlots  = stats.trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s + 'Slots'] || 0), 0);
         const totalPlants = stats.trackedSpecies.reduce((sum, s) => sum + (stats.plantCounts[s] || 0), 0);
@@ -836,6 +977,7 @@
             + etaRow('&#x1F331; Max Size', gp.boosts, null, stats.granterETAs?.cropSize, '#a78bfa', true)
             + etaRow('&#x1F41D; Bee Size', gp.boostsBee, null, stats.granterETAs?.cropSizeBee, '#a78bfa', true);
         const hasETAs = etaRows.trim() !== '';
+        const granterAlarmEnabled = getMagicCircleValue('granter_completion_alarm', false);
 
         let growthHTML;
         if (stats.notMature === 0 && stats.notMaxSize === 0) {
@@ -881,7 +1023,10 @@
 
             ${hasETAs ? `
             <div style="padding:12px 16px;border-bottom:1px solid #1a2a2a;">
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#4a8a8a;margin-bottom:4px;">Mutation Estimates</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#4a8a8a;">Mutation Estimates</div>
+                    <button class="granter-alarm-toggle" title="${granterAlarmEnabled ? 'Disable' : 'Enable'} completion alarm" aria-label="${granterAlarmEnabled ? 'Disable' : 'Enable'} granter completion alarm" style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:5px;cursor:pointer;font-size:14px;line-height:1;background:${granterAlarmEnabled ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.06)'};border:1px solid ${granterAlarmEnabled ? 'rgba(251,191,36,0.55)' : 'rgba(255,255,255,0.1)'};color:${granterAlarmEnabled ? '#fbbf24' : '#4a6868'};">${granterAlarmEnabled ? '&#x1F514;' : '&#x1F515;'}</button>
+                </div>
                 ${etaRows}
             </div>` : ''}
 
@@ -926,6 +1071,20 @@
         const _currentZoom = getMagicCircleValue('farm_stats_zoom', 1);
         popup.style.transform       = _currentZoom !== 1 ? 'scale(' + _currentZoom + ')' : '';
         popup.style.transformOrigin = 'top left';
+
+        popup.querySelector('.granter-alarm-toggle')?.addEventListener('click', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            const enabled = !getMagicCircleValue('granter_completion_alarm', false);
+            setMagicCircleValue('granter_completion_alarm', enabled);
+            _granterAlarmCompleted.clear();
+            if (enabled) {
+                _getGranterAlarmAudioCtx();
+                _checkGranterCompletionAlarm(stats);
+            } else {
+                _stopGranterAlarm();
+            }
+            updatePopupContent(popup);
+        });
 
         popup.querySelector('.zoom-toggle-btn').onclick = function(e) {
             e.preventDefault(); e.stopPropagation();
@@ -1226,7 +1385,7 @@
                     ['combineDawnAmbercharged','Dawnbound+Amberbound'],['combineFrozenThunderstruck','Frozen+Thunderstruck']
                 ], c);
                 // Estimates scope: on = whole garden (granters act on all crops); off = tracked species only.
-                section('Estimate Scope', [['granterAllGarden','Whole garden']], c);
+                section('Estimate Scope', [['granterAllGarden','Whole garden'],['ignorePreserved','Ignore preserved']], c);
             }
 
             renderBody();
@@ -1369,6 +1528,11 @@
     // === Init ===
     console.log('[GardenOverview] Init, document.readyState:', document.readyState, '| document.body:', !!document.body);
     initWsState();
+    setInterval(() => {
+        if (getMagicCircleValue('granter_completion_alarm', false)) {
+            _checkGranterCompletionAlarm(getFarmStatsData());
+        }
+    }, 5000);
 
     if (document.body) {
         createTriggerButton();
