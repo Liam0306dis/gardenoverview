@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.36
+// @version      1.37
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -154,6 +154,203 @@
     }
     let _wsPlayerId = null;
     let _wsLoggedPlayerId = null;
+    let _wsMySlotIndex = null;
+
+    // === Plant focus ===
+    const PLANT_FOCUS_DEFAULTS = {
+        enabled: false,
+        scope: 'tracked',
+        mutations: [],
+        mutationRule: 'all',
+        invert: false,
+        opacity: 0.2
+    };
+    const PLANT_FOCUS_MUTATIONS = [
+        ['Gold', 'Gold'],
+        ['Rainbow', 'Rainbow'],
+        ['Wet', 'Wet'],
+        ['Chilled', 'Chilled'],
+        ['Frozen', 'Frozen'],
+        ['Thunderstruck', 'Thunderstruck'],
+        ['Dawnlit', 'Dawnlit'],
+        ['Ambershine', 'Amberlit'],
+        ['Dawncharged', 'Dawnbound'],
+        ['Ambercharged', 'Amberbound'],
+        ['Thundercharged', 'Thundercharged']
+    ];
+    let _focusTileSystem = null;
+    let _focusOriginalAlpha = new WeakMap();
+    const _focusManagedDisplays = new Set();
+
+    function _getPlantFocusConfig() {
+        const stored = getMagicCircleValue('plant_focus_filter', null) || {};
+        const config = Object.assign({}, PLANT_FOCUS_DEFAULTS, stored);
+        if (!Array.isArray(stored.mutations)) {
+            const legacy = stored.mutation || 'any';
+            if (legacy === 'rainbow') config.mutations = ['Rainbow'];
+            else if (legacy === 'gold') config.mutations = ['Gold'];
+            else if (legacy === 'color') { config.mutations = ['Gold', 'Rainbow']; config.mutationRule = 'any'; }
+            else if (legacy === 'neither') { config.mutations = ['Gold', 'Rainbow']; config.mutationRule = 'none'; }
+            else config.mutations = [];
+        }
+        return config;
+    }
+    function _savePlantFocusConfig(config) {
+        setMagicCircleValue('plant_focus_filter', Object.assign({}, PLANT_FOCUS_DEFAULTS, config));
+    }
+    function _getPlantFocusTrackedSpecies() {
+        const defaults = _getTrackedSpeciesDefaults();
+        const config = Object.assign({}, defaults, getMagicCircleValue('tracked_species', null) || {});
+        return new Set(Object.keys(config).filter(function(species) { return !!config[species]; }));
+    }
+    function _getPlantFocusMutationOptions() {
+        const labels = new Map(PLANT_FOCUS_MUTATIONS);
+        const garden = state.atoms.playerSlot?.data?.garden;
+        const tiles = garden && garden.tileObjects ? Object.values(garden.tileObjects) : [];
+        tiles.forEach(function(tile) {
+            (Array.isArray(tile?.slots) ? tile.slots : []).forEach(function(slot) {
+                (Array.isArray(slot?.mutations) ? slot.mutations : []).forEach(function(mutation) {
+                    if (!labels.has(mutation)) labels.set(mutation, mutation);
+                });
+            });
+        });
+        return Array.from(labels, function(pair) { return { id: pair[0], label: pair[1] }; });
+    }
+    function _plantFocusMutationMatches(tileObject, selectedMutations, rule, ignorePreserved) {
+        const allSlots = tileObject && Array.isArray(tileObject.slots) ? tileObject.slots : [];
+        const slots = ignorePreserved ? allSlots.filter(function(slot) { return slot?.preserved !== true; }) : allSlots;
+        if (!slots.length) return false;
+        if (!selectedMutations.length) return true;
+        if (rule === 'none') {
+            return slots.every(function(slot) {
+                const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
+                return selectedMutations.every(function(mutation) { return !mutations.includes(mutation); });
+            });
+        }
+        return slots.some(function(slot) {
+            const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
+            if (rule === 'any') return selectedMutations.some(function(mutation) { return mutations.includes(mutation); });
+            return selectedMutations.every(function(mutation) { return mutations.includes(mutation); });
+        });
+    }
+    function _plantFocusMatches(tileObject, config, trackedSpecies, ignorePreserved) {
+        const species = tileObject && tileObject.species;
+        let scopeMatches = config.scope === 'all';
+        if (config.scope === 'tracked') scopeMatches = trackedSpecies.has(species);
+        else if (config.scope !== 'all') scopeMatches = species === config.scope;
+        const selectedMutations = Array.isArray(config.mutations) ? config.mutations : [];
+        const matches = scopeMatches && _plantFocusMutationMatches(tileObject, selectedMutations, config.mutationRule, ignorePreserved);
+        return config.invert ? !matches : matches;
+    }
+    function _restorePlantFocusDisplay(displayObject) {
+        if (!_focusOriginalAlpha.has(displayObject)) return;
+        displayObject.alpha = _focusOriginalAlpha.get(displayObject);
+        _focusOriginalAlpha.delete(displayObject);
+        _focusManagedDisplays.delete(displayObject);
+    }
+    function _restoreAllPlantFocus() {
+        Array.from(_focusManagedDisplays).forEach(_restorePlantFocusDisplay);
+    }
+    function _applyPlantFocusFade() {
+        const config = _getPlantFocusConfig();
+        const tileSystem = _focusTileSystem;
+        const tileViews = tileSystem && tileSystem.tileViews;
+        const dirtMap = tileSystem && tileSystem.map && tileSystem.map.globalTileIdxToDirtTile;
+        if (!config.enabled || _wsMySlotIndex == null || !(tileViews instanceof targetWindow.Map) || !dirtMap) {
+            _restoreAllPlantFocus();
+            return;
+        }
+
+        const trackedSpecies = _getPlantFocusTrackedSpecies();
+        const mutationConfig = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
+        const ignorePreserved = mutationConfig.ignorePreserved !== false;
+        const seen = new Set();
+        tileViews.forEach(function(view, globalTileIndex) {
+            const dirtTile = typeof dirtMap.get === 'function' ? dirtMap.get(globalTileIndex) : dirtMap[globalTileIndex];
+            const tileObject = view && view.tileObject;
+            const displayObject = view && view.displayObject;
+            if (!dirtTile || dirtTile.userSlotIdx !== _wsMySlotIndex ||
+                !tileObject || tileObject.objectType !== 'plant' || !displayObject) return;
+
+            seen.add(displayObject);
+            if (!_focusOriginalAlpha.has(displayObject)) {
+                _focusOriginalAlpha.set(displayObject, Number.isFinite(displayObject.alpha) ? displayObject.alpha : 1);
+                _focusManagedDisplays.add(displayObject);
+            }
+            const originalAlpha = _focusOriginalAlpha.get(displayObject);
+            displayObject.alpha = _plantFocusMatches(tileObject, config, trackedSpecies, ignorePreserved)
+                ? originalAlpha
+                : originalAlpha * Math.max(0.05, Math.min(0.8, Number(config.opacity) || PLANT_FOCUS_DEFAULTS.opacity));
+        });
+
+        Array.from(_focusManagedDisplays).forEach(function(displayObject) {
+            if (!seen.has(displayObject)) _restorePlantFocusDisplay(displayObject);
+        });
+    }
+    function _capturePlantFocusTileSystem(system) {
+        if (!system || system === _focusTileSystem) return;
+        _restoreAllPlantFocus();
+        _focusTileSystem = system;
+        if (typeof system.destroy === 'function' && !system.__gardenOverviewFocusDestroyWrapped) {
+            const originalDestroy = system.destroy;
+            system.__gardenOverviewFocusDestroyWrapped = true;
+            system.destroy = function() {
+                if (_focusTileSystem === system) {
+                    _restoreAllPlantFocus();
+                    _focusTileSystem = null;
+                    setTimeout(_armPlantFocusTileCapture, 0);
+                }
+                return originalDestroy.apply(this, arguments);
+            };
+        }
+        setTimeout(_applyPlantFocusFade, 0);
+    }
+    function _armPlantFocusTileCapture() {
+        if (_focusTileSystem) return;
+        const proto = targetWindow.Object.prototype;
+        const existing = Object.getOwnPropertyDescriptor(proto, 'tileViews');
+        if (existing && existing.get && existing.get.__gardenOverviewFocusTrap) return;
+        if (existing && !existing.configurable) return;
+
+        let storedValue;
+        const priorGetter = existing && existing.get;
+        const priorSetter = existing && existing.set;
+        const getter = function() { return priorGetter ? priorGetter.call(this) : storedValue; };
+        getter.__gardenOverviewFocusTrap = true;
+        Object.defineProperty(proto, 'tileViews', {
+            configurable: true,
+            get: getter,
+            set: function(value) {
+                if (priorSetter) priorSetter.call(this, value);
+                else Object.defineProperty(this, 'tileViews', {
+                    configurable: true, enumerable: true, writable: true, value: value
+                });
+                if (this && this.name === 'tileObject' && value instanceof targetWindow.Map) {
+                    _capturePlantFocusTileSystem(this);
+                }
+            }
+        });
+    }
+    (function _installPlantFocusCapture() {
+        const objectCtor = targetWindow.Object;
+        if (!objectCtor.__gardenOverviewFocusDefineWrapped) {
+            const originalDefineProperty = objectCtor.defineProperty;
+            objectCtor.defineProperty = function(target, property, descriptor) {
+                const result = originalDefineProperty.apply(this, arguments);
+                try {
+                    if (property === 'tileViews' && target && target.name === 'tileObject' &&
+                        descriptor && descriptor.value instanceof targetWindow.Map) {
+                        _capturePlantFocusTileSystem(target);
+                    }
+                } catch (e) { /* capture is best effort */ }
+                return result;
+            };
+            objectCtor.__gardenOverviewFocusDefineWrapped = true;
+        }
+        _armPlantFocusTileCapture();
+        setInterval(_applyPlantFocusFade, 600);
+    })();
+
     function _wsReadSelfPlayerId(fullState, room, game) {
         const id =
             (fullState && typeof fullState.selfPlayerId === 'string' ? fullState.selfPlayerId : null) ||
@@ -218,6 +415,10 @@
                     }
                     const mySlot = _wsPickMySlot(game, room, _wsPlayerId);
                     if (mySlot && mySlot.data) {
+                        _wsMySlotIndex = null;
+                        for (let slotIndex = 0; slotIndex < game.userSlots.length; slotIndex++) {
+                            if (game.userSlots[slotIndex] === mySlot) { _wsMySlotIndex = slotIndex; break; }
+                        }
                         state.atoms.playerSlot = mySlot;
                         if (mySlot.data.inventory) state.atoms.inventory = mySlot.data.inventory;
                         if (Array.isArray(mySlot.data.petSlots)) state.atoms.activePets = mySlot.data.petSlots;
@@ -344,10 +545,201 @@
 
     // === Helpers ===
     function removeConfigGuis() {
-        ['go-mut-config-gui', 'go-species-config-gui', 'go-keybind-config-gui'].forEach(function(id) {
+        ['go-mut-config-gui', 'go-species-config-gui', 'go-keybind-config-gui', 'go-plant-focus-gui'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) { el._abort?.abort(); el.remove(); }
         });
+    }
+
+    function _makeConfigGuiDraggable(gui, handle) {
+        if (!gui || !handle) return;
+        const positionKey = 'config_position_' + gui.id;
+        handle.style.cursor = 'move';
+        handle.style.userSelect = 'none';
+
+        function setPosition(left, top) {
+            const maxLeft = Math.max(0, window.innerWidth - gui.offsetWidth);
+            const maxTop = Math.max(0, window.innerHeight - gui.offsetHeight);
+            gui.style.left = Math.max(0, Math.min(maxLeft, left)) + 'px';
+            gui.style.top = Math.max(0, Math.min(maxTop, top)) + 'px';
+        }
+
+        const saved = getMagicCircleValue(positionKey, null);
+        if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+            setPosition(saved.left, saved.top);
+        }
+
+        handle.addEventListener('pointerdown', function(e) {
+            if (e.button !== 0 || e.target.closest('button,input,select,textarea,a')) return;
+            e.preventDefault();
+            const rect = gui.getBoundingClientRect();
+            const offsetX = e.clientX - rect.left;
+            const offsetY = e.clientY - rect.top;
+            handle.setPointerCapture?.(e.pointerId);
+
+            function move(ev) {
+                setPosition(ev.clientX - offsetX, ev.clientY - offsetY);
+            }
+            function finish() {
+                handle.removeEventListener('pointermove', move);
+                handle.removeEventListener('pointerup', finish);
+                handle.removeEventListener('pointercancel', finish);
+                const finalRect = gui.getBoundingClientRect();
+                setMagicCircleValue(positionKey, { left: finalRect.left, top: finalRect.top });
+            }
+
+            handle.addEventListener('pointermove', move);
+            handle.addEventListener('pointerup', finish);
+            handle.addEventListener('pointercancel', finish);
+        });
+    }
+
+    function showPlantFocusConfig(popup) {
+        const existing = document.getElementById('go-plant-focus-gui');
+        if (existing) { existing.remove(); return; }
+
+        const gui = document.createElement('div');
+        gui.id = 'go-plant-focus-gui';
+        gui.style.cssText = 'position:fixed;z-index:31000;background:#0a1f1f;border:1px solid #1e3a3a;border-radius:8px;padding:0;font-family:monospace;width:300px;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.6);color:#d6f7f7;';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'padding:9px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;';
+        header.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;">&#x25D0; Plant Focus</span>';
+        const close = document.createElement('button');
+        close.innerHTML = '&#x2715;';
+        close.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;';
+        close.onclick = function() { gui.remove(); };
+        header.appendChild(close);
+        gui.appendChild(header);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:11px 12px;display:flex;flex-direction:column;gap:11px;font-size:11px;overflow-y:auto;';
+        gui.appendChild(body);
+
+        function makeRow(label, control) {
+            const row = document.createElement('label');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;color:#7ab8b8;';
+            const text = document.createElement('span');
+            text.textContent = label;
+            row.appendChild(text);
+            row.appendChild(control);
+            return row;
+        }
+        function styleSelect(select) {
+            select.style.cssText = 'width:154px;box-sizing:border-box;padding:5px 7px;border-radius:4px;border:1px solid #1e3a3a;background:#061414;color:#d6f7f7;font:11px monospace;';
+            return select;
+        }
+        function save() {
+            const next = {
+                enabled: enabled.checked,
+                scope: scope.value,
+                mutations: Array.from(selectedMutations),
+                mutationRule: mutationRule.value,
+                invert: invert.checked,
+                opacity: Number(opacity.value) / 100
+            };
+            _savePlantFocusConfig(next);
+            opacityValue.textContent = opacity.value + '%';
+            const focusButton = popup && popup.querySelector('.plant-focus-btn');
+            if (focusButton) {
+                focusButton.style.background = next.enabled ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)';
+                focusButton.style.color = next.enabled ? '#a4f5f5' : '#7ab8b8';
+            }
+            _applyPlantFocusFade();
+        }
+
+        const config = _getPlantFocusConfig();
+        const enabled = document.createElement('input');
+        enabled.type = 'checkbox'; enabled.checked = !!config.enabled;
+        body.appendChild(makeRow('Enabled', enabled));
+
+        const scope = styleSelect(document.createElement('select'));
+        [['tracked', 'Tracked species'], ['all', 'All species']].forEach(function(pair) {
+            const option = document.createElement('option');
+            option.value = pair[0]; option.textContent = pair[1]; scope.appendChild(option);
+        });
+        const species = new Set(Object.keys(_getTrackedSpeciesDefaults()));
+        _getGardenSpeciesCounts().forEach(function(_count, name) { species.add(name); });
+        Array.from(species).sort(function(a, b) { return a.localeCompare(b); }).forEach(function(name) {
+            const option = document.createElement('option');
+            option.value = name; option.textContent = name; scope.appendChild(option);
+        });
+        scope.value = config.scope;
+        if (!scope.value) scope.value = 'tracked';
+        body.appendChild(makeRow('Show', scope));
+
+        const selectedMutations = new Set(Array.isArray(config.mutations) ? config.mutations : []);
+        const mutationRule = styleSelect(document.createElement('select'));
+        [['all', 'All selected'], ['any', 'Any selected'], ['none', 'None selected']].forEach(function(pair) {
+            const option = document.createElement('option');
+            option.value = pair[0]; option.textContent = pair[1]; mutationRule.appendChild(option);
+        });
+        mutationRule.value = config.mutationRule;
+        if (!mutationRule.value) mutationRule.value = 'all';
+        body.appendChild(makeRow('Mutation rule', mutationRule));
+
+        const mutationSection = document.createElement('div');
+        mutationSection.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+        const mutationHeader = document.createElement('div');
+        mutationHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;color:#7ab8b8;';
+        const mutationTitle = document.createElement('span');
+        const clearMutations = document.createElement('button');
+        clearMutations.textContent = 'Clear';
+        clearMutations.style.cssText = 'background:rgba(255,255,255,0.06);border:1px solid #1e3a3a;color:#7ab8b8;border-radius:4px;padding:3px 7px;font:10px monospace;cursor:pointer;';
+        mutationHeader.appendChild(mutationTitle); mutationHeader.appendChild(clearMutations);
+        const mutationGrid = document.createElement('div');
+        mutationGrid.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
+        mutationSection.appendChild(mutationHeader); mutationSection.appendChild(mutationGrid);
+        body.appendChild(mutationSection);
+
+        const mutationOptions = _getPlantFocusMutationOptions();
+        selectedMutations.forEach(function(id) {
+            if (!mutationOptions.some(function(option) { return option.id === id; })) mutationOptions.push({ id: id, label: id });
+        });
+        function renderMutationPills() {
+            mutationTitle.textContent = selectedMutations.size ? 'Mutations (' + selectedMutations.size + ')' : 'Mutations (any)';
+            mutationGrid.innerHTML = '';
+            mutationOptions.forEach(function(option) {
+                const active = selectedMutations.has(option.id);
+                const button = document.createElement('button');
+                button.textContent = option.label;
+                button.style.cssText = 'border:1px solid ' + (active ? '#4fa3a3' : '#1e3a3a') + ';background:' + (active ? 'rgba(79,163,163,0.22)' : 'rgba(255,255,255,0.04)') + ';color:' + (active ? '#a4f5f5' : '#6f9b9b') + ';border-radius:4px;padding:4px 7px;font:10px monospace;cursor:pointer;';
+                button.onclick = function() {
+                    if (active) selectedMutations.delete(option.id); else selectedMutations.add(option.id);
+                    renderMutationPills();
+                    save();
+                };
+                mutationGrid.appendChild(button);
+            });
+        }
+        clearMutations.onclick = function() { selectedMutations.clear(); renderMutationPills(); save(); };
+        renderMutationPills();
+
+        const invert = document.createElement('input');
+        invert.type = 'checkbox'; invert.checked = !!config.invert;
+        body.appendChild(makeRow('Invert match', invert));
+
+        const opacityWrap = document.createElement('div');
+        opacityWrap.style.cssText = 'width:154px;display:flex;align-items:center;gap:7px;';
+        const opacity = document.createElement('input');
+        opacity.type = 'range'; opacity.min = '5'; opacity.max = '60'; opacity.step = '5';
+        opacity.value = String(Math.round((Number(config.opacity) || PLANT_FOCUS_DEFAULTS.opacity) * 100));
+        opacity.style.cssText = 'width:112px;accent-color:#4fa3a3;';
+        const opacityValue = document.createElement('span');
+        opacityValue.style.cssText = 'width:34px;text-align:right;color:#a4f5f5;';
+        opacityValue.textContent = opacity.value + '%';
+        opacityWrap.appendChild(opacity); opacityWrap.appendChild(opacityValue);
+        body.appendChild(makeRow('Faded opacity', opacityWrap));
+
+        [enabled, scope, mutationRule, invert, opacity].forEach(function(control) {
+            control.addEventListener('input', save);
+            control.addEventListener('change', save);
+        });
+
+        document.body.appendChild(gui);
+        gui.style.left = Math.round((window.innerWidth - gui.offsetWidth) / 2) + 'px';
+        gui.style.top = Math.round((window.innerHeight - gui.offsetHeight) / 2) + 'px';
+        _makeConfigGuiDraggable(gui, header);
     }
 
     // Shared scoped stylesheet for the config panels (pills, actions, search, section labels).
@@ -1007,7 +1399,8 @@
                 <span style="font-size:13px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;">&#x1F33F; Garden Overview</span>
                 <div style="display:flex;align-items:center;gap:4px;">
                     <button class="species-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked plants">&#x1F33F;</button>
-                    <button class="mut-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked mutations">&#x2699;</button>
+                    <button class="plant-focus-btn" style="background:${_getPlantFocusConfig().enabled ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)'};border:none;color:${_getPlantFocusConfig().enabled ? '#a4f5f5' : '#7ab8b8'};cursor:pointer;font-size:14px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure plant focus">&#x25D0;</button>
+                    <button class="mut-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure tracked mutations">&#x1F527;</button>
                     <button class="keybind-config-btn" style="background:rgba(255,255,255,0.08);border:none;color:#7ab8b8;cursor:pointer;font-size:13px;border-radius:4px;width:24px;height:24px;line-height:1;" title="Configure keybind">&#x2328;</button>
                     <button class="zoom-toggle-btn" style="background:${getMagicCircleValue('farm_stats_zoom', 1) !== 1 ? 'rgba(164,245,245,0.2)' : 'rgba(255,255,255,0.08)'};border:none;color:#7ab8b8;cursor:pointer;font-size:8px;border-radius:4px;width:32px;height:24px;line-height:1;font-family:monospace;" title="Cycle zoom">${getMagicCircleValue('farm_stats_zoom', 1)}×</button>
                     <button class="close-farm-stats-btn" style="background:#c0392b;color:white;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;">&#x2715;</button>
@@ -1203,6 +1596,7 @@
             document.body.appendChild(kbGui);
             kbGui.style.left = Math.round((window.innerWidth  - kbGui.offsetWidth)  / 2) + 'px';
             kbGui.style.top  = Math.round((window.innerHeight - kbGui.offsetHeight) / 2) + 'px';
+            _makeConfigGuiDraggable(kbGui, hdr);
         });
 
         // Mutations toggle
@@ -1225,6 +1619,12 @@
             setMagicCircleValue('farmStatsPopup_plantsOpen', bd.style.display === 'block' ? '1' : '0');
         });
 
+        // Plant focus config button
+        popup.querySelector('.plant-focus-btn').addEventListener('click', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            showPlantFocusConfig(popup);
+        });
+
         // Species config button
         popup.querySelector('.species-config-btn').addEventListener('click', function(e) {
             e.preventDefault(); e.stopPropagation();
@@ -1242,7 +1642,7 @@
             speciesGui.appendChild(_makeConfigStyle('go-species-config-gui'));
 
             const config = () => Object.assign({}, defaults, getMagicCircleValue('tracked_species', null) || {});
-            const save = (c) => { setMagicCircleValue('tracked_species', c); updatePopupContent(popup); };
+            const save = (c) => { setMagicCircleValue('tracked_species', c); _applyPlantFocusFade(); updatePopupContent(popup); };
 
             // Header (title + live count + close)
             const hdr = document.createElement('div');
@@ -1325,6 +1725,7 @@
             document.body.appendChild(speciesGui);
             speciesGui.style.left = Math.round((window.innerWidth  - speciesGui.offsetWidth)  / 2) + 'px';
             speciesGui.style.top  = Math.round((window.innerHeight - speciesGui.offsetHeight) / 2) + 'px';
+            _makeConfigGuiDraggable(speciesGui, hdr);
         });
 
         // Mutation config button
@@ -1344,7 +1745,7 @@
             // Header
             const hdr = document.createElement('div');
             hdr.style.cssText = 'padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a2a2a;flex:0 0 auto;';
-            hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;">&#x2699; Mutation Config</span>';
+            hdr.innerHTML = '<span style="font-size:11px;font-weight:bold;color:#a4f5f5;letter-spacing:0.03em;">&#x1F527; Mutation Config</span>';
             const cb = document.createElement('button'); cb.textContent = '✕';
             cb.style.cssText = 'background:#c0392b;color:white;border:none;border-radius:4px;width:20px;height:20px;font-size:10px;cursor:pointer;flex:0 0 auto;';
             cb.onclick = () => cfgGui.remove();
@@ -1392,6 +1793,7 @@
             document.body.appendChild(cfgGui);
             cfgGui.style.left = Math.round((window.innerWidth  - cfgGui.offsetWidth)  / 2) + 'px';
             cfgGui.style.top  = Math.round((window.innerHeight - cfgGui.offsetHeight) / 2) + 'px';
+            _makeConfigGuiDraggable(cfgGui, hdr);
         });
     }
 
