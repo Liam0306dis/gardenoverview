@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.37
+// @version      1.38
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -180,6 +180,7 @@
     ];
     let _focusTileSystem = null;
     let _focusOriginalAlpha = new WeakMap();
+    let _focusDesiredAlpha = new WeakMap();
     const _focusManagedDisplays = new Set();
 
     function _getPlantFocusConfig() {
@@ -216,40 +217,68 @@
         });
         return Array.from(labels, function(pair) { return { id: pair[0], label: pair[1] }; });
     }
-    function _plantFocusMutationMatches(tileObject, selectedMutations, rule, ignorePreserved) {
-        const allSlots = tileObject && Array.isArray(tileObject.slots) ? tileObject.slots : [];
-        const slots = ignorePreserved ? allSlots.filter(function(slot) { return slot?.preserved !== true; }) : allSlots;
-        if (!slots.length) return false;
+    function _plantFocusMutationMatches(slot, selectedMutations, rule) {
+        const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
         if (!selectedMutations.length) return true;
         if (rule === 'none') {
-            return slots.every(function(slot) {
-                const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
-                return selectedMutations.every(function(mutation) { return !mutations.includes(mutation); });
-            });
+            return selectedMutations.every(function(mutation) { return !mutations.includes(mutation); });
         }
-        return slots.some(function(slot) {
-            const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
-            if (rule === 'any') return selectedMutations.some(function(mutation) { return mutations.includes(mutation); });
-            return selectedMutations.every(function(mutation) { return mutations.includes(mutation); });
-        });
+        if (rule === 'any') return selectedMutations.some(function(mutation) { return mutations.includes(mutation); });
+        return selectedMutations.every(function(mutation) { return mutations.includes(mutation); });
     }
-    function _plantFocusMatches(tileObject, config, trackedSpecies, ignorePreserved) {
+    function _plantFocusMatches(tileObject, slot, config, trackedSpecies, ignorePreserved) {
+        if (ignorePreserved && slot?.preserved === true) return false;
         const species = tileObject && tileObject.species;
         let scopeMatches = config.scope === 'all';
         if (config.scope === 'tracked') scopeMatches = trackedSpecies.has(species);
         else if (config.scope !== 'all') scopeMatches = species === config.scope;
         const selectedMutations = Array.isArray(config.mutations) ? config.mutations : [];
-        const matches = scopeMatches && _plantFocusMutationMatches(tileObject, selectedMutations, config.mutationRule, ignorePreserved);
+        const matches = scopeMatches && _plantFocusMutationMatches(slot, selectedMutations, config.mutationRule);
         return config.invert ? !matches : matches;
+    }
+    function _fadePlantFocusDisplay(displayObject, opacity, seen) {
+        if (!displayObject) return;
+        seen.add(displayObject);
+        if (!_focusOriginalAlpha.has(displayObject)) {
+            _focusOriginalAlpha.set(displayObject, Number.isFinite(displayObject.alpha) ? displayObject.alpha : 1);
+            _focusManagedDisplays.add(displayObject);
+        }
+        const desiredAlpha = _focusOriginalAlpha.get(displayObject) * opacity;
+        _focusDesiredAlpha.set(displayObject, desiredAlpha);
+        displayObject.alpha = desiredAlpha;
     }
     function _restorePlantFocusDisplay(displayObject) {
         if (!_focusOriginalAlpha.has(displayObject)) return;
-        displayObject.alpha = _focusOriginalAlpha.get(displayObject);
+        if (!displayObject.destroyed) displayObject.alpha = _focusOriginalAlpha.get(displayObject);
         _focusOriginalAlpha.delete(displayObject);
+        _focusDesiredAlpha.delete(displayObject);
         _focusManagedDisplays.delete(displayObject);
     }
     function _restoreAllPlantFocus() {
         Array.from(_focusManagedDisplays).forEach(_restorePlantFocusDisplay);
+    }
+    function _enforcePlantFocusDisplay(displayObject) {
+        if (!_focusManagedDisplays.has(displayObject)) return;
+        if (displayObject.destroyed) {
+            _focusOriginalAlpha.delete(displayObject);
+            _focusDesiredAlpha.delete(displayObject);
+            _focusManagedDisplays.delete(displayObject);
+            return;
+        }
+        const desiredAlpha = _focusDesiredAlpha.get(displayObject);
+        if (Number.isFinite(desiredAlpha) && displayObject.alpha !== desiredAlpha) displayObject.alpha = desiredAlpha;
+    }
+    function _armPlantFocusTileView(view) {
+        if (!view || typeof view.draw !== 'function' || view.__gardenOverviewFocusDrawWrapped) return;
+        const originalDraw = view.draw;
+        view.__gardenOverviewFocusDrawWrapped = true;
+        view.draw = function() {
+            const result = originalDraw.apply(this, arguments);
+            _enforcePlantFocusDisplay(view.childView?.plantVisual?.container);
+            const cropVisuals = view.childView?.plantVisual?.getCropVisuals?.() || [];
+            cropVisuals.forEach(function(cropVisual) { _enforcePlantFocusDisplay(cropVisual?.cropVisual?.container); });
+            return result;
+        };
     }
     function _applyPlantFocusFade() {
         const config = _getPlantFocusConfig();
@@ -264,6 +293,7 @@
         const trackedSpecies = _getPlantFocusTrackedSpecies();
         const mutationConfig = Object.assign({}, MUTATION_DEFAULTS, getMagicCircleValue('mutation_tracking', null) || {});
         const ignorePreserved = mutationConfig.ignorePreserved !== false;
+        const opacity = Math.max(0.05, Math.min(0.8, Number(config.opacity) || PLANT_FOCUS_DEFAULTS.opacity));
         const seen = new Set();
         tileViews.forEach(function(view, globalTileIndex) {
             const dirtTile = typeof dirtMap.get === 'function' ? dirtMap.get(globalTileIndex) : dirtMap[globalTileIndex];
@@ -272,15 +302,31 @@
             if (!dirtTile || dirtTile.userSlotIdx !== _wsMySlotIndex ||
                 !tileObject || tileObject.objectType !== 'plant' || !displayObject) return;
 
-            seen.add(displayObject);
-            if (!_focusOriginalAlpha.has(displayObject)) {
-                _focusOriginalAlpha.set(displayObject, Number.isFinite(displayObject.alpha) ? displayObject.alpha : 1);
-                _focusManagedDisplays.add(displayObject);
+            const slots = Array.isArray(tileObject.slots) ? tileObject.slots : [];
+            const slotVisibility = new Map();
+            slots.forEach(function(slot) {
+                slotVisibility.set(slot.slotId, _plantFocusMatches(tileObject, slot, config, trackedSpecies, ignorePreserved));
+            });
+            const hasVisibleSlot = Array.from(slotVisibility.values()).some(Boolean);
+            _armPlantFocusTileView(view);
+            const plantVisual = view.childView?.plantVisual;
+            if (!plantVisual?.container) return;
+            const cropVisuals = plantVisual.getCropVisuals?.() || [];
+
+            if (!hasVisibleSlot) {
+                _fadePlantFocusDisplay(plantVisual.container, opacity, seen);
+                cropVisuals.forEach(function(cropVisual) { _restorePlantFocusDisplay(cropVisual?.cropVisual?.container); });
+                return;
             }
-            const originalAlpha = _focusOriginalAlpha.get(displayObject);
-            displayObject.alpha = _plantFocusMatches(tileObject, config, trackedSpecies, ignorePreserved)
-                ? originalAlpha
-                : originalAlpha * Math.max(0.05, Math.min(0.8, Number(config.opacity) || PLANT_FOCUS_DEFAULTS.opacity));
+
+            _restorePlantFocusDisplay(plantVisual.container);
+            cropVisuals.forEach(function(cropVisual) {
+                if (slotVisibility.get(cropVisual?.slotId) === false) {
+                    _fadePlantFocusDisplay(cropVisual?.cropVisual?.container, opacity, seen);
+                } else {
+                    _restorePlantFocusDisplay(cropVisual?.cropVisual?.container);
+                }
+            });
         });
 
         Array.from(_focusManagedDisplays).forEach(function(displayObject) {
