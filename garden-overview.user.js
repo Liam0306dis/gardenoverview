@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.38
+// @version      1.39
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -219,11 +219,11 @@
     }
     function _plantFocusMutationMatches(slot, selectedMutations, rule) {
         const mutations = slot && Array.isArray(slot.mutations) ? slot.mutations : [];
-        if (!selectedMutations.length) return true;
         if (rule === 'none') {
             return selectedMutations.every(function(mutation) { return !mutations.includes(mutation); });
         }
         if (rule === 'any') return selectedMutations.some(function(mutation) { return mutations.includes(mutation); });
+        if (!selectedMutations.length) return mutations.length === 0;
         return selectedMutations.every(function(mutation) { return mutations.includes(mutation); });
     }
     function _plantFocusMatches(tileObject, slot, config, trackedSpecies, ignorePreserved) {
@@ -743,7 +743,7 @@
             if (!mutationOptions.some(function(option) { return option.id === id; })) mutationOptions.push({ id: id, label: id });
         });
         function renderMutationPills() {
-            mutationTitle.textContent = selectedMutations.size ? 'Mutations (' + selectedMutations.size + ')' : 'Mutations (any)';
+            mutationTitle.textContent = 'Mutations (' + selectedMutations.size + ')';
             mutationGrid.innerHTML = '';
             mutationOptions.forEach(function(option) {
                 const active = selectedMutations.has(option.id);
