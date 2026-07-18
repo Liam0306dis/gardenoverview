@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.39
+// @version      1.40
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -780,6 +780,9 @@
         [enabled, scope, mutationRule, invert, opacity].forEach(function(control) {
             control.addEventListener('input', save);
             control.addEventListener('change', save);
+        });
+        [enabled, scope, mutationRule, invert, opacity].forEach(function(control) {
+            control.addEventListener('change', function() { control.blur(); });
         });
 
         document.body.appendChild(gui);
