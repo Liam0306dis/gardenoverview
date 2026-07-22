@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.40
+// @version      1.41
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -182,6 +182,7 @@
     let _focusOriginalAlpha = new WeakMap();
     let _focusDesiredAlpha = new WeakMap();
     const _focusManagedDisplays = new Set();
+    const _focusTileSystemsByViews = new WeakMap();
 
     function _getPlantFocusConfig() {
         const stored = getMagicCircleValue('plant_focus_filter', null) || {};
@@ -268,6 +269,9 @@
         const desiredAlpha = _focusDesiredAlpha.get(displayObject);
         if (Number.isFinite(desiredAlpha) && displayObject.alpha !== desiredAlpha) displayObject.alpha = desiredAlpha;
     }
+    function _getPlantFocusCropContainer(cropVisual) {
+        return cropVisual?.cropVisual?.container || cropVisual?.container || null;
+    }
     function _armPlantFocusTileView(view) {
         if (!view || typeof view.draw !== 'function' || view.__gardenOverviewFocusDrawWrapped) return;
         const originalDraw = view.draw;
@@ -276,7 +280,7 @@
             const result = originalDraw.apply(this, arguments);
             _enforcePlantFocusDisplay(view.childView?.plantVisual?.container);
             const cropVisuals = view.childView?.plantVisual?.getCropVisuals?.() || [];
-            cropVisuals.forEach(function(cropVisual) { _enforcePlantFocusDisplay(cropVisual?.cropVisual?.container); });
+            cropVisuals.forEach(function(cropVisual) { _enforcePlantFocusDisplay(_getPlantFocusCropContainer(cropVisual)); });
             return result;
         };
     }
@@ -315,16 +319,17 @@
 
             if (!hasVisibleSlot) {
                 _fadePlantFocusDisplay(plantVisual.container, opacity, seen);
-                cropVisuals.forEach(function(cropVisual) { _restorePlantFocusDisplay(cropVisual?.cropVisual?.container); });
+                cropVisuals.forEach(function(cropVisual) { _restorePlantFocusDisplay(_getPlantFocusCropContainer(cropVisual)); });
                 return;
             }
 
             _restorePlantFocusDisplay(plantVisual.container);
             cropVisuals.forEach(function(cropVisual) {
+                const cropContainer = _getPlantFocusCropContainer(cropVisual);
                 if (slotVisibility.get(cropVisual?.slotId) === false) {
-                    _fadePlantFocusDisplay(cropVisual?.cropVisual?.container, opacity, seen);
+                    _fadePlantFocusDisplay(cropContainer, opacity, seen);
                 } else {
-                    _restorePlantFocusDisplay(cropVisual?.cropVisual?.container);
+                    _restorePlantFocusDisplay(cropContainer);
                 }
             });
         });
@@ -377,6 +382,31 @@
             }
         });
     }
+    function _armPlantFocusMapCapture() {
+        const mapProto = targetWindow.Map && targetWindow.Map.prototype;
+        if (!mapProto || mapProto.set?.__gardenOverviewFocusMapWrapped) return;
+        const originalSet = mapProto.set;
+        const wrappedSet = function(key, value) {
+            const result = originalSet.apply(this, arguments);
+            try {
+                const map = value?.map;
+                const looksLikeTileView = Number.isInteger(key) && value?.globalTileIdx === key &&
+                    value?.displayObject && 'tileObject' in value && typeof value.onDataChanged === 'function' &&
+                    map?.globalTileIdxToDirtTile && map?.globalTileIdxToBoardwalk;
+                if (looksLikeTileView && _focusTileSystem?.tileViews !== this) {
+                    let system = _focusTileSystemsByViews.get(this);
+                    if (!system) {
+                        system = { name: 'tileObject', tileViews: this, map: map };
+                        _focusTileSystemsByViews.set(this, system);
+                    }
+                    _capturePlantFocusTileSystem(system);
+                }
+            } catch (e) { /* capture is best effort */ }
+            return result;
+        };
+        wrappedSet.__gardenOverviewFocusMapWrapped = true;
+        mapProto.set = wrappedSet;
+    }
     (function _installPlantFocusCapture() {
         const objectCtor = targetWindow.Object;
         if (!objectCtor.__gardenOverviewFocusDefineWrapped) {
@@ -394,6 +424,7 @@
             objectCtor.__gardenOverviewFocusDefineWrapped = true;
         }
         _armPlantFocusTileCapture();
+        _armPlantFocusMapCapture();
         setInterval(_applyPlantFocusFade, 600);
     })();
 
