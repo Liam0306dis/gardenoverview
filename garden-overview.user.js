@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.41
+// @version      1.42
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -1236,7 +1236,7 @@
             // A slot can hold only one time mutation (Amberlit/Dawnlit/Amberbound/Dawnbound), so both
             // lit granters target the same pool: slots with no time mutation at all.
             amberlit:   getGranterETA(activePets, 'AmberlitGranter',   2.0,  gp.amber),
-            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    2.0,  gp.amber),
+            dawnlit:    getGranterETA(activePets, 'DawnlitGranter',    4.0,  gp.amber),
             wet:         getGranterETA(activePets, 'RainDance',          10.0, gp.wet),
             chilled:     getGranterETA(activePets, 'SnowGranter',       8.0,  gp.chilled),
             cropSize:    getGranterETA(activePets, ['ProduceScaleBoostII', 'Crop Size Boost II'], 0.40, gp.boosts),
