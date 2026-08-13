@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.42
+// @version      1.43
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -23,6 +23,36 @@
     // === State ===
     const state = { atoms: {} };
     const targetWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+    // Our own player id, read off the socket. The game's Welcome frame is the only place on the
+    // wire that still carries it: the room state has no selfPlayerId any more and the socket url
+    // dropped its playerId parameter, so without this there is nothing to match a user slot on.
+    // Sockets are wrapped as they are constructed because Welcome is the first frame after one
+    // opens, leaving no window in which to find a socket and subscribe to it.
+    let _wsWelcomePlayerId = null;
+    (function _armWelcomeCapture() {
+        try {
+            const OriginalWebSocket = targetWindow.WebSocket;
+            if (typeof OriginalWebSocket !== 'function' || OriginalWebSocket.__gardenOverviewWelcome) return;
+            const WrappedWebSocket = function () {
+                const socket = new OriginalWebSocket(...arguments);
+                socket.addEventListener('message', function (event) {
+                    const data = event.data;
+                    // Only the Welcome frame mentions selfPlayerId, so nothing else is ever parsed.
+                    if (typeof data !== 'string' || data.indexOf('"selfPlayerId"') === -1) return;
+                    try {
+                        const id = JSON.parse(data).selfPlayerId;
+                        if (typeof id === 'string' && id) _wsWelcomePlayerId = id;
+                    } catch (e) { /* not the frame we are after */ }
+                });
+                return socket;
+            };
+            WrappedWebSocket.prototype = OriginalWebSocket.prototype;
+            Object.setPrototypeOf(WrappedWebSocket, OriginalWebSocket);
+            WrappedWebSocket.__gardenOverviewWelcome = true;
+            targetWindow.WebSocket = WrappedWebSocket;
+        } catch (e) { /* leave the native constructor alone rather than break the game */ }
+    })();
     console.log('[GardenOverview] unsafeWindow available:', typeof unsafeWindow !== 'undefined');
     let _keybind = null;
 
@@ -485,7 +515,7 @@
                 try {
                     const room = fullState && fullState.data ? fullState.data : null;
                     const game = fullState && fullState.child && fullState.child.data ? fullState.child.data : null;
-                    _wsPlayerId = _wsReadSelfPlayerId(fullState, room, game) || _wsPlayerId || _wsReadPlayerId();
+                    _wsPlayerId = _wsWelcomePlayerId || _wsReadSelfPlayerId(fullState, room, game) || _wsPlayerId || _wsReadPlayerId();
                     if (_wsPlayerId && _wsPlayerId !== _wsLoggedPlayerId) {
                         _wsLoggedPlayerId = _wsPlayerId;
                         console.log('[GardenOverview] playerId resolved:', _wsPlayerId);
