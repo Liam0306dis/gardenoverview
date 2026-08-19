@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Garden Overview
 // @namespace    http://tampermonkey.net/
-// @version      1.43
+// @version      1.44
 // @description  Garden Overview popup with mutation & species tracking
 // @author       Liam
 // @match        https://1227719606223765687.discordsays.com/*
@@ -486,7 +486,9 @@
         if (pid) {
             for (let i = 0; i < slots.length; i++) {
                 const s = slots[i];
-                if (s && (s.playerId === pid || (s.data && s.data.playerId === pid))) return s;
+                // A slot's own id moved from playerId to userId and carries the same value; the
+                // old names are kept so older game builds still match.
+                if (s && (s.userId === pid || s.playerId === pid || (s.data && s.data.playerId === pid))) return s;
             }
         }
         let dbId;
